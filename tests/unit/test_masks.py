@@ -2,7 +2,7 @@
 Unit tests for raster-mask to polygon conversion.
 
 Covers pf.mask_to_polygon, Detection.masks_to_segments and
-Detections.masks_to_segments.
+Detections.masks_to_segments, plus the simplifier they share a module boundary with.
 """
 
 import cv2
@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 import pixelflow as pf
+from pixelflow.masks import simplify_polygon
 from pixelflow.validators import validate_segments
 
 
@@ -312,3 +313,46 @@ class TestMasksToSegments:
         annotated = pf.annotate.polygon(image.copy(), detections.masks_to_segments())
 
         assert annotated.any()
+
+
+# ============================================================================
+# Simplification
+# ============================================================================
+
+class TestSimplify:
+    """Test polygon simplification after the move from Shapely to OpenCV."""
+
+    def test_simplify_polygon_drops_points_on_straight_runs(self):
+        polygon = [(0, 0), (10, 0), (11, 0), (20, 0), (20, 10), (20, 20), (10, 20), (0, 20)]
+
+        simplified = simplify_polygon(polygon, tolerance=1.0)
+
+        assert sorted(simplified) == [[0.0, 0.0], [0.0, 20.0], [20.0, 0.0], [20.0, 20.0]]
+
+    def test_simplify_polygon_accepts_a_closed_ring(self):
+        ring = [(0, 0), (10, 0), (20, 0), (20, 20), (0, 20), (0, 0)]
+
+        assert len(simplify_polygon(ring, tolerance=1.0)) == 4
+
+    def test_simplify_polygon_keeps_fractional_coordinates(self):
+        polygon = [[10.7, 5.25], [100.33, 5.25], [100.33, 80.9], [55.0, 81.0], [10.7, 80.9]]
+
+        simplified = simplify_polygon(polygon, tolerance=1.0)
+
+        assert all(point in polygon for point in simplified)
+
+    def test_simplify_polygon_keeps_a_triangle_and_normalizes_it(self):
+        triangle = [(0, 0), (10, 0), (5, 8)]
+
+        assert simplify_polygon(triangle, tolerance=5.0) == [[0.0, 0.0], [10.0, 0.0], [5.0, 8.0]]
+
+    def test_simplify_masks_leaves_rasters_alone(self):
+        raster = np.zeros((20, 20), dtype=bool)
+        raster[5:15, 5:15] = True
+        polygon = [[0, 0], [10, 0], [20, 0], [20, 20], [0, 20]]
+        detection = pf.Detection(bbox=[0, 0, 20, 20], masks=[raster, polygon])
+
+        detection.simplify_masks(tolerance=1.0)
+
+        assert detection.masks[0] is raster
+        assert len(detection.masks[1]) == 4

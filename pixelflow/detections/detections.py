@@ -17,9 +17,8 @@ from PIL import Image
 from pixelflow.validators import (validate_bbox,
                                   validate_segments,
                                   round_coord,
-                                  round_to_decimal,
-                                  simplify_polygon)
-from pixelflow.masks import mask_to_polygon
+                                  round_to_decimal)
+from pixelflow.masks import mask_to_polygon, simplify_polygon
 from typing import (List,
                     Iterator, Optional, Union, Any, Dict)
 
@@ -544,8 +543,12 @@ class Detection:
             - Recommended for real-time applications with complex segmentation masks
         """
         if self.masks:
-            # Apply the simplify function to each mask (assuming self.masks is a list of polygons)
-            self.masks = [simplify_polygon(mask, tolerance, preserve_topology) for mask in self.masks]
+            # A raster is not a polygon: it passes through untouched, as documented.
+            self.masks = [
+                mask if _is_raster_mask(mask)
+                else simplify_polygon(mask, tolerance, preserve_topology)
+                for mask in self.masks
+            ]
 
     def masks_to_segments(self, tolerance: float = 1.5, keep_masks: bool = True) -> bool:
         """

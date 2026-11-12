@@ -1186,21 +1186,6 @@ class TestValidators:
 
         assert rounded == 3.14
 
-    def test_simplify_polygon(self):
-        """Test polygon simplification."""
-        from pixelflow.validators import simplify_polygon
-
-        # Complex polygon
-        polygon = [
-            (0, 0), (10, 0), (11, 0), (20, 0),
-            (20, 10), (20, 20), (10, 20), (0, 20)
-        ]
-
-        simplified = simplify_polygon(polygon, tolerance=5.0)
-
-        # Should have fewer points
-        assert len(simplified) <= len(polygon)
-
 
 # ============================================================================
 # Edge Cases

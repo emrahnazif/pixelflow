@@ -9,7 +9,6 @@ Optional fields; see round_coord for why a KeyPoint raises instead.
 import math
 
 import numpy as np
-from shapely.geometry import Polygon as Shapely_Polygon
 
 
 # How much precision pixelflow keeps. Truncating pixel coordinates to whole
@@ -124,25 +123,3 @@ def round_to_decimal(value, decimals=CONFIDENCE_DECIMALS):
     if value is not None:
         return round(float(value), decimals)
     return None
-
-
-def simplify_polygon(polygon_points: list, tolerance: float = 2.0, preserve_topology: bool = True) -> list:
-    """
-    Simplifies a single polygon using Shapely.
-
-    Args:
-        polygon_points (list): A list of tuples representing a polygon.
-        tolerance (float): The tolerance factor for simplification (higher = more simplified).
-        preserve_topology (bool): If True, the function will try to preserve the polygon's topology.
-
-    Returns:
-        list: A simplified polygon represented as a list of tuples.
-    """
-    # Convert the list of tuples to a Shapely Polygon
-    polygon = Shapely_Polygon(polygon_points)
-
-    # Simplify the polygon using the specified tolerance
-    simplified_polygon = polygon.simplify(tolerance=tolerance, preserve_topology=preserve_topology)
-
-    # Return the simplified coordinates as a list of tuples
-    return list(simplified_polygon.exterior.coords)

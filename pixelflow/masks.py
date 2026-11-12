@@ -19,7 +19,7 @@ import numpy as np
 
 from pixelflow.validators import validate_segments
 
-__all__ = ["mask_to_polygon"]
+__all__ = ["mask_to_polygon", "simplify_polygon"]
 
 
 def _trace_outline(region: np.ndarray) -> np.ndarray:
@@ -183,3 +183,30 @@ def mask_to_polygon(mask, tolerance: float = 1.5):
     outline = _simplify_outline(_trace_outline(region), 2.0 * tolerance)  # doubled, like the points
     return validate_segments(outline / 2.0 + (left + x, top + y))
 
+
+def simplify_polygon(polygon_points, tolerance: float = 2.0, preserve_topology: bool = True):
+    """
+    Reduce the number of points in one polygon with Douglas-Peucker simplification.
+
+    Args:
+        polygon_points: The polygon as a sequence of (x, y) points. A closing point
+                        that repeats the first one is accepted and dropped.
+        tolerance (float): Maximum distance in pixels a simplified edge may stray from
+                           the original outline (higher = more simplified).
+        preserve_topology (bool): Accepted for backwards compatibility and ignored.
+                                  Plain Douglas-Peucker can, on a thin shape and a
+                                  large tolerance, produce an outline that crosses
+                                  itself.
+
+    Returns:
+        List[List[float]]: The simplified polygon as ``[[x, y], ...]`` at the shared
+            precision, not closed.
+    """
+    points = np.asarray(polygon_points, dtype=np.float32).reshape(-1, 2)
+    if len(points) > 1 and np.array_equal(points[0], points[-1]):
+        points = points[:-1]
+    if len(points) > 3:
+        # Douglas-Peucker only ever drops vertices, so the survivors are the caller's
+        # own points; validate_segments rounds the float32 artefacts back out of them.
+        points = cv2.approxPolyDP(points.reshape(-1, 1, 2), float(tolerance), True)[:, 0, :]
+    return validate_segments(points)
