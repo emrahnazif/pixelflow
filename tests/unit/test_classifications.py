@@ -6,6 +6,7 @@ the annotator. The rounding-parity test is the important one: it pins Classifica
 to the same precision policy as Detection so the two can never drift apart.
 """
 
+import inspect
 import json
 
 import numpy as np
@@ -420,3 +421,66 @@ class TestClassificationAnnotator:
             small_image.copy(), sample_classifications, top_k=3, position="bottom_right"
         )
         assert annotated.shape == small_image.shape
+
+
+# ============================================================================
+# Reading to_dict() back
+# ============================================================================
+
+class TestFromDict:
+    """Test Classification.from_dict, Classifications.from_dict and from_json."""
+
+    def test_row_round_trip(self):
+        row = pf.Classification(class_id=207, class_name="golden retriever",
+                                confidence=0.94, metadata={"source": "cam-1"})
+
+        restored = pf.Classification.from_dict(row.to_dict())
+
+        assert isinstance(restored, pf.Classification)
+        assert restored.to_dict() == row.to_dict()
+
+    def test_to_dict_and_the_constructor_name_the_same_fields(self):
+        assert set(pf.Classification().to_dict()) == set(inspect.signature(pf.Classification).parameters)
+
+    def test_unknown_keys_are_ignored_and_missing_keys_default(self):
+        restored = pf.Classification.from_dict({"class_name": "cat", "added_later": 1})
+
+        assert restored.to_dict() == pf.Classification(class_name="cat").to_dict()
+        assert pf.Classification.from_dict({}).to_dict() == pf.Classification().to_dict()
+
+    def test_restored_row_has_its_own_metadata(self):
+        row = pf.Classification(class_id=1, metadata={"tags": [1]})
+
+        restored = pf.Classification.from_dict(row.to_dict())
+        restored.metadata["tags"].append(2)
+
+        assert row.metadata == {"tags": [1]}
+
+    def test_collection_round_trip_keeps_order(self):
+        result = pf.from_scores([0.1, 0.7, 0.2], labels=["cat", "dog", "bird"])
+
+        restored = pf.Classifications.from_dict(result.to_dict())
+
+        assert isinstance(restored, pf.Classifications)
+        assert restored.to_dict() == result.to_dict()
+        assert restored.top1.class_name == "dog"
+
+    def test_collection_round_trip_through_json(self):
+        result = pf.from_scores([0.1, 0.7, 0.2], labels=["cat", "dog", "bird"])
+
+        assert pf.Classifications.from_json(result.to_json()).to_dict() == result.to_dict()
+        assert pf.Classifications.from_json(result.to_json().encode()).to_dict() == result.to_dict()
+
+    def test_collection_identifiers_are_not_part_of_to_dict(self):
+        """Documented: only the rows are written, so only the rows come back."""
+        result = pf.Classifications([pf.Classification(class_id=0)], inference_id="run-7",
+                                    metadata={"k": 1})
+
+        restored = pf.Classifications.from_dict(result.to_dict())
+
+        assert restored.inference_id is None and restored.metadata is None
+
+    def test_empty_collection(self):
+        assert len(pf.Classifications.from_dict([])) == 0
+        assert len(pf.Classifications.from_json("[]")) == 0
+

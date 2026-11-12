@@ -11,6 +11,7 @@ localisation that never happened.
 import copy as copy_module
 import json
 
+from pixelflow.serialization import constructor_fields, own
 from pixelflow.validators import round_to_decimal
 from typing import Any, Dict, Iterator, List, Optional, Union
 
@@ -94,6 +95,10 @@ class Classification:
             >>> import pixelflow as pf
             >>> pf.Classification(207, "golden retriever", 0.94).to_dict()
             {'class_id': 207, 'class_name': 'golden retriever', 'confidence': 0.94, 'metadata': None}
+
+        Notes:
+            - `metadata` is the classification's own dictionary, not a copy. Treat
+              the result as read-only, or rebuild with `from_dict()`, which copies it
         """
         return {
             "class_id": self.class_id,
@@ -101,6 +106,29 @@ class Classification:
             "confidence": self.confidence,
             "metadata": self.metadata,
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Classification":
+        """
+        Rebuild a Classification from the dictionary `to_dict()` produces.
+
+        Args:
+            data (Dict[str, Any]): A classification dictionary. Unknown keys are
+                ignored and missing keys take the constructor's defaults, so
+                dictionaries written by other pixelflow versions still read.
+
+        Returns:
+            Classification: A new classification with its own metadata.
+
+        Example:
+            >>> import pixelflow as pf
+            >>> row = pf.Classification(class_id=207, class_name="golden retriever", confidence=0.94)
+            >>> pf.Classification.from_dict(row.to_dict()).to_dict() == row.to_dict()
+            True
+            >>> pf.Classification.from_dict({"class_name": "cat"}).confidence is None
+            True
+        """
+        return cls(**own(constructor_fields(cls, data)))
 
     def __repr__(self) -> str:
         return (f"Classification(class_id={self.class_id!r}, "
@@ -309,6 +337,54 @@ class Classifications:
             ...     f.write(result.to_json())
         """
         return json.dumps(self.to_dict(), indent=4)
+
+    @classmethod
+    def from_dict(cls, items: List[Dict[str, Any]]) -> "Classifications":
+        """
+        Rebuild a Classifications collection from the list `to_dict()` produces.
+
+        Args:
+            items (List[Dict[str, Any]]): Classification dictionaries, each read
+                with `Classification.from_dict`.
+
+        Returns:
+            Classifications: A new collection holding the rows in the order given.
+
+        Example:
+            >>> import pixelflow as pf
+            >>> result = pf.from_scores([0.1, 0.9], labels=["cat", "dog"])
+            >>> restored = pf.Classifications.from_dict(result.to_dict())
+            >>> restored.top1.class_name
+            'dog'
+
+        Notes:
+            - `to_dict()` writes the rows only. The collection's own `inference_id`
+              and `metadata` are not part of it, so they come back as None; set
+              them on the result if you stored them yourself.
+        """
+        return cls([Classification.from_dict(item) for item in items])
+
+    @classmethod
+    def from_json(cls, text: Union[str, bytes]) -> "Classifications":
+        """
+        Rebuild a Classifications collection from the JSON string `to_json()` produces.
+
+        Args:
+            text (Union[str, bytes]): JSON array of classification dictionaries.
+
+        Returns:
+            Classifications: A new collection holding the rows in the order given.
+
+        Raises:
+            json.JSONDecodeError: If `text` is not valid JSON.
+
+        Example:
+            >>> import pixelflow as pf
+            >>> result = pf.from_scores([0.1, 0.9], labels=["cat", "dog"])
+            >>> pf.Classifications.from_json(result.to_json()).top1.class_name
+            'dog'
+        """
+        return cls.from_dict(json.loads(text))
 
     def __repr__(self) -> str:
         return f"Classifications({len(self.classifications)} rows)"
