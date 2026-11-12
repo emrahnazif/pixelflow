@@ -1,7 +1,7 @@
 # PixelFlow
 
 [![PyPI version](https://badge.fury.io/py/pixelflow.svg)](https://badge.fury.io/py/pixelflow)
-[![CI](https://github.com/datamarkin/pixelflow/actions/workflows/ci.yml/badge.svg)](https://github.com/datamarkin/pixelflow/actions/workflows/ci.yml)
+[![CI](https://github.com/emrahnazif/pixelflow/actions/workflows/ci.yml/badge.svg)](https://github.com/emrahnazif/pixelflow/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -430,7 +430,7 @@ report = detections.to_json_with_metrics()
 
 ## Documentation
 
-Full documentation available at [https://datamarkin.com/docs/pixelflow/](https://datamarkin.com/docs/pixelflow/)
+Full documentation available at [https://emrah.fr/pixelflow/](https://emrah.fr/pixelflow/)
 
 ## Contributing
 
@@ -442,4 +442,4 @@ MIT License - see LICENSE file for details.
 
 ---
 
-Built with love by [Datamarkin](https://datamarkin.com)
+Built with love by [Emrah Nazif](https://emrah.fr)

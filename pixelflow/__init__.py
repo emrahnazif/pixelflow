@@ -1,5 +1,5 @@
 __version__ = "0.6.0"
-__author__ = "Datamarkin"
+__author__ = "Emrah NAZIF"
 
 # Import core modules
 from . import media
