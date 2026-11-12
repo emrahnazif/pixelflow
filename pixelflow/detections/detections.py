@@ -19,6 +19,7 @@ from pixelflow.validators import (validate_bbox,
                                   round_coord,
                                   round_to_decimal)
 from pixelflow.masks import mask_to_polygon, simplify_polygon
+from pixelflow.serialization import constructor_fields, own
 from typing import (List,
                     Iterator, Optional, Union, Any, Dict)
 
@@ -154,6 +155,32 @@ class KeyPoint:
             "name": self.name,
             "confidence": float(self.confidence) if self.confidence is not None else None,
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "KeyPoint":
+        """
+        Rebuild a KeyPoint from the dictionary `to_dict()` produces.
+
+        Args:
+            data (Dict[str, Any]): A keypoint dictionary. `x`, `y` and `id` are
+                                  required; `name` and `confidence` default to None.
+                                  Unknown keys are ignored.
+
+        Returns:
+            KeyPoint: A new keypoint with the dictionary's values.
+
+        Raises:
+            TypeError: If `x`, `y` or `id` is missing.
+            ValueError: If a coordinate is not a finite number.
+
+        Example:
+            >>> import pixelflow as pf
+            >>> keypoint = pf.KeyPoint(100, 200, 0, "nose", 0.9)
+            >>> restored = pf.KeyPoint.from_dict(keypoint.to_dict())
+            >>> restored.to_dict() == keypoint.to_dict()
+            True
+        """
+        return cls(**own(constructor_fields(cls, data)))
 
 
 class Detection:
@@ -363,6 +390,9 @@ class Detection:
             - All NumPy numeric types (int32, float32, etc.) converted to native Python types
             - All optional fields are included even if None for consistent API responses
             - Output is fully JSON-serializable (can use json.dumps() directly)
+            - Lists and dictionaries such as `metadata`, `zones` and `segments` are
+              the detection's own objects, not copies. Treat the result as read-only,
+              or rebuild with `from_dict()`, which copies them
         """
         # Helper function to convert numpy types to native Python types
         def to_python_type(value):
@@ -494,6 +524,78 @@ class Detection:
             return mask_dict['data']
         else:
             raise ValueError(f"Unknown mask format: {mask_dict['format']}")
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Detection":
+        """
+        Rebuild a Detection from the dictionary `to_dict()` produces.
+
+        The inverse of `to_dict()`: masks are decoded back into arrays, keypoints
+        become `KeyPoint` objects again, and every other field is handed to the
+        constructor. Reads stored or transmitted results without the caller having
+        to know which fields a detection has or how its masks were encoded.
+
+        Args:
+            data (Dict[str, Any]): A detection dictionary, as written by `to_dict()`
+                                  or parsed from `to_json()`. Unknown keys are
+                                  ignored and missing keys take the constructor's
+                                  defaults, so dictionaries written by other
+                                  pixelflow versions still read.
+
+        Returns:
+            Detection: A new detection, independent of `data`.
+
+        Raises:
+            ValueError: If a mask uses a format `decode_mask` does not know, or a
+                        keypoint coordinate is not a finite number.
+            TypeError: If a keypoint is missing `x`, `y` or `id`.
+
+        Example:
+            >>> import numpy as np
+            >>> import pixelflow as pf
+            >>>
+            >>> mask = np.zeros((480, 640), dtype=bool)
+            >>> mask[100:200, 50:300] = True
+            >>> detection = pf.Detection(bbox=[50, 100, 300, 200], masks=[mask],
+            ...                          class_name="car", confidence=0.9)
+            >>>
+            >>> # Round trip through a plain dictionary
+            >>> restored = pf.Detection.from_dict(detection.to_dict())
+            >>> np.array_equal(restored.masks[0], mask)
+            True
+            >>>
+            >>> # Partial dictionaries read too; the rest take defaults
+            >>> pf.Detection.from_dict({"bbox": [10, 20, 30, 40]}).class_name is None
+            True
+            >>>
+            >>> # Keys this version does not know are ignored
+            >>> pf.Detection.from_dict({"bbox": [10, 20, 30, 40], "added_later": 1}).bbox
+            [10.0, 20.0, 30.0, 40.0]
+
+        Notes:
+            - Values pass through the same validation as any new detection: an
+              invalid `bbox` becomes None, coordinates round to two decimals and
+              confidence to three. Values that came out of `to_dict()` were already
+              rounded, so they come back unchanged
+            - Raster masks come back with the pixels, dtype and shape they were
+              written with
+            - A mask entry that is not an encoded dictionary is taken as already
+              decoded: a polygon list is copied, an array is kept as it is
+            - Lists and dictionaries are copied, so changing the restored
+              detection never reaches `data`, or the detection `data` came from
+        """
+        fields = constructor_fields(cls, data)
+        # Each keypoint is rebuilt from its own dictionary below, and copies it there.
+        keypoints = fields.pop("keypoints", None)
+        fields = own(fields)
+
+        if fields.get("masks") is not None:
+            fields["masks"] = [cls.decode_mask(mask) if isinstance(mask, dict) else mask
+                               for mask in fields["masks"]]
+        if keypoints is not None:
+            fields["keypoints"] = [KeyPoint.from_dict(kp) for kp in keypoints]
+
+        return cls(**fields)
 
     def simplify_masks(self, tolerance: float = 2.0, preserve_topology: bool = True) -> None:
         """
@@ -1042,6 +1144,94 @@ class Detections:
             - Suitable for pandas DataFrame conversion and data analysis
         """
         return [detection.to_dict() for detection in self.detections]
+
+    @classmethod
+    def from_dict(cls, items: List[Dict[str, Any]]) -> "Detections":
+        """
+        Rebuild a Detections collection from the list `to_dict()` produces.
+
+        The inverse of `to_dict()`. Reads results that were stored or sent as plain
+        data back into a collection that filters, annotates and converts like one
+        that came straight from a model.
+
+        Args:
+            items (List[Dict[str, Any]]): Detection dictionaries, as written by
+                                         `to_dict()`. Each is read with
+                                         `Detection.from_dict`.
+
+        Returns:
+            Detections: A new collection holding the detections in the order given.
+
+        Raises:
+            ValueError: If a mask uses an unknown format, or a keypoint coordinate
+                        is not a finite number.
+            TypeError: If a keypoint is missing `x`, `y` or `id`.
+
+        Example:
+            >>> import pixelflow as pf
+            >>>
+            >>> detections = pf.from_arrays(boxes, scores, masks=masks)
+            >>>
+            >>> # Store as plain data, read back later
+            >>> stored = detections.to_dict()
+            >>> restored = pf.Detections.from_dict(stored)
+            >>> len(restored) == len(detections)
+            True
+            >>>
+            >>> # A restored result behaves like any other
+            >>> confident = restored.filter_by_confidence(0.5)
+            >>> restored.masks_to_segments()
+            >>>
+            >>> # Hand-written rows work too
+            >>> pf.Detections.from_dict([{"bbox": [10, 20, 30, 40], "class_name": "car"}])
+
+        Notes:
+            - Everything `to_dict()` writes comes back: boxes, masks, segments,
+              keypoints, classes, text, tracking, zones and timing
+            - Detections are added through `add_detection`, so a dictionary without
+              a valid `bbox`, or with a NaN confidence, is dropped as it would be
+              from any converter. Nothing `to_dict()` wrote is affected: a
+              collection never holds such a detection
+            - Raster masks are decoded eagerly, one array per mask
+        """
+        detections = cls()
+        for item in items:
+            detections.add_detection(Detection.from_dict(item))
+        return detections
+
+    @classmethod
+    def from_json(cls, text: Union[str, bytes]) -> "Detections":
+        """
+        Rebuild a Detections collection from the JSON string `to_json()` produces.
+
+        Args:
+            text (Union[str, bytes]): JSON array of detection dictionaries.
+
+        Returns:
+            Detections: A new collection holding the detections in the order given.
+
+        Raises:
+            json.JSONDecodeError: If `text` is not valid JSON.
+            ValueError: If a mask uses an unknown format, or a keypoint coordinate
+                        is not a finite number.
+
+        Example:
+            >>> import pixelflow as pf
+            >>>
+            >>> # Write results to disk, read them back in another process
+            >>> with open("results.json", "w") as f:
+            ...     f.write(detections.to_json())
+            >>> with open("results.json") as f:
+            ...     restored = pf.Detections.from_json(f.read())
+            >>>
+            >>> # Or straight from an HTTP response body
+            >>> restored = pf.Detections.from_json(response.content)
+
+        Notes:
+            - Parses the JSON and hands the result to `from_dict`; see it for what
+              is restored and what is dropped
+        """
+        return cls.from_dict(json.loads(text))
 
     def to_json_with_metrics(self) -> str:
         """

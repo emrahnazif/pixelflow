@@ -5,6 +5,8 @@ Tests the core Detection, Detections, and KeyPoint classes including
 creation, serialization, and basic operations.
 """
 
+import inspect
+
 import pytest
 import numpy as np
 import json
@@ -472,3 +474,219 @@ class TestDetectionValidity:
                                 scores=[0.9, 0.9, 0.9], class_ids=[0, 0, 0])
         assert len(result) == 1
         assert result[0].bbox == [10.0, 10.0, 60.0, 60.0]
+
+
+# ============================================================================
+# Reading to_dict() back
+# ============================================================================
+
+def full_detection():
+    """A detection with every field set, already at pixelflow's stored precision."""
+    mask = np.zeros((60, 80), dtype=bool)
+    mask[10:30, 20:50] = True
+    return pf.Detection(
+        inference_id="run-7",
+        bbox=[20.25, 10, 50, 30.5],
+        masks=[mask],
+        segments=[[20, 10], [50, 10], [50, 30], [20, 30]],
+        keypoints=[pf.KeyPoint(25.5, 12, 0, "nose", 0.91), pf.KeyPoint(40, 22.75, 1)],
+        class_id=3,
+        class_name="cat",
+        labels=["indoor", "pet"],
+        confidence=0.876,
+        tracker_id=7,
+        metadata={"source": "cam-1", "tags": [1, 2]},
+        zones=["z1"],
+        zone_names=["Entrance"],
+        line_crossings=[{"line": "l1", "direction": "in"}],
+        first_seen_time=1.5,
+        total_time=2.5,
+        text="hello",
+    )
+
+
+class TestFromDict:
+    """Test Detection.from_dict, Detections.from_dict and Detections.from_json."""
+
+    def test_keypoint_round_trip(self, sample_keypoint):
+        restored = pf.KeyPoint.from_dict(sample_keypoint.to_dict())
+
+        assert isinstance(restored, pf.KeyPoint)
+        assert restored.to_dict() == sample_keypoint.to_dict()
+
+    def test_keypoint_optional_fields_default_and_unknown_keys_are_ignored(self):
+        restored = pf.KeyPoint.from_dict({"x": 1, "y": 2, "id": 4, "visible": True})
+
+        assert (restored.x, restored.y, restored.id) == (1.0, 2.0, 4)
+        assert restored.name is None and restored.confidence is None
+
+    def test_keypoint_without_a_position_is_refused(self):
+        with pytest.raises(TypeError):
+            pf.KeyPoint.from_dict({"id": 0, "name": "nose"})
+        with pytest.raises(ValueError):
+            pf.KeyPoint.from_dict({"x": float("nan"), "y": 1, "id": 0})
+
+    def test_brief_round_trip_box_mask_keypoints_class_confidence(self):
+        mask = np.zeros((100, 120), dtype=bool)
+        mask[10:40, 20:70] = True
+        detections = pf.from_arrays(
+            boxes=[[20, 10, 70, 40]], scores=[0.83], class_ids=[1], masks=mask[None],
+            keypoints=np.array([[[30.5, 15.25, 0.9], [60.0, 35.0, 0.4]]]),
+            labels=["cat", "dog"],
+        )
+
+        restored = pf.Detections.from_dict(detections.to_dict())
+
+        assert len(restored) == 1
+        original, back = detections[0], restored[0]
+        assert back.bbox == original.bbox == [20.0, 10.0, 70.0, 40.0]
+        assert back.masks[0].dtype == bool and np.array_equal(back.masks[0], mask)
+        assert [kp.to_dict() for kp in back.keypoints] == [kp.to_dict() for kp in original.keypoints]
+        assert all(isinstance(kp, pf.KeyPoint) for kp in back.keypoints)
+        assert (back.class_id, back.class_name, back.confidence) == (1, "dog", 0.83)
+
+    def test_every_field_round_trips(self):
+        original = full_detection()
+
+        restored = pf.Detection.from_dict(original.to_dict())
+
+        assert restored.to_dict() == original.to_dict()
+        assert np.array_equal(restored.masks[0], original.masks[0])
+
+    def test_every_field_round_trips_through_json(self):
+        detections = pf.Detections()
+        detections.add_detection(full_detection())
+
+        restored = pf.Detections.from_json(detections.to_json())
+
+        assert restored.to_dict() == detections.to_dict()
+        assert pf.Detections.from_json(detections.to_json().encode()).to_dict() == detections.to_dict()
+
+    def test_to_dict_and_the_constructor_name_the_same_fields(self):
+        """from_dict reads the constructor's arguments; this keeps to_dict in step with them."""
+        assert set(pf.Detection().to_dict()) == set(inspect.signature(pf.Detection).parameters)
+        assert set(pf.KeyPoint(0, 0, 0).to_dict()) == set(inspect.signature(pf.KeyPoint).parameters)
+
+    @pytest.mark.parametrize("mask", [
+        np.random.default_rng(0).random((37, 53)) > 0.5,
+        np.random.default_rng(1).random((20, 20)).astype(np.float32),
+    ], ids=["png", "raw"])
+    def test_raster_masks_come_back_with_pixels_dtype_and_shape(self, mask):
+        """One mask per encoding; the codec's own dtype matrix is tested with decode_mask."""
+        detection = pf.Detection(bbox=[0, 0, 10, 10], masks=[mask])
+
+        restored = pf.Detection.from_dict(json.loads(json.dumps(detection.to_dict())))
+
+        assert restored.masks[0].dtype == mask.dtype
+        assert restored.masks[0].shape == mask.shape
+        assert np.array_equal(restored.masks[0], mask)
+
+    def test_polygon_mask_round_trips(self):
+        polygon = [[1.0, 2.0], [5.0, 2.0], [5.0, 9.0]]
+        detection = pf.Detection(bbox=[1, 2, 5, 9], masks=[polygon])
+
+        restored = pf.Detection.from_dict(detection.to_dict())
+
+        assert restored.masks == [polygon]
+        assert restored.masks[0] is not polygon
+
+    def test_masks_already_decoded_are_accepted(self):
+        raster = np.ones((4, 4), dtype=bool)
+        polygon = [[0, 0], [4, 0], [4, 4]]
+
+        restored = pf.Detection.from_dict({"bbox": [0, 0, 4, 4], "masks": [raster, polygon]})
+
+        assert restored.masks[0] is raster
+        assert restored.masks[1] == polygon and restored.masks[1] is not polygon
+
+    def test_a_container_field_added_later_is_copied_without_being_listed(self):
+        """The copy is by type, not by field name, so new fields are safe by default."""
+        from pixelflow.serialization import constructor_fields, own
+
+        class Future:
+            def __init__(self, known=None, added_later=None):
+                pass
+
+        data = {"known": 1, "added_later": {"tags": [1, 2]}, "unknown": 3}
+        fields = own(constructor_fields(Future, data))
+
+        assert fields == {"known": 1, "added_later": {"tags": [1, 2]}}
+        assert fields["added_later"] is not data["added_later"]
+        assert fields["added_later"]["tags"] is not data["added_later"]["tags"]
+
+    def test_unknown_mask_format_is_refused(self):
+        with pytest.raises(ValueError, match="Unknown mask format"):
+            pf.Detection.from_dict({"bbox": [0, 0, 4, 4], "masks": [{"format": "rle", "data": ""}]})
+
+    def test_unknown_keys_are_ignored(self):
+        data = full_detection().to_dict()
+        data["added_by_a_newer_version"] = {"anything": 1}
+
+        assert pf.Detection.from_dict(data).to_dict() == full_detection().to_dict()
+
+    def test_missing_keys_take_the_constructor_defaults(self):
+        assert pf.Detection.from_dict({}).to_dict() == pf.Detection().to_dict()
+
+        partial = pf.Detection.from_dict({"bbox": [1, 2, 3, 4], "class_name": "car"})
+        assert partial.bbox == [1.0, 2.0, 3.0, 4.0]
+        assert partial.class_name == "car"
+        assert partial.masks is None and partial.keypoints is None
+        assert partial.zones == [] and partial.total_time == 0.0
+
+    def test_restored_detection_shares_nothing_with_its_source(self):
+        original = full_detection()
+
+        restored = pf.Detection.from_dict(original.to_dict())
+        restored.metadata["tags"].append(3)
+        restored.zones.append("z2")
+        restored.labels.append("extra")
+        restored.line_crossings[0]["direction"] = "out"
+        restored.masks[0][:] = False
+
+        assert original.to_dict() == full_detection().to_dict()
+        assert original.masks[0].any()
+
+    def test_values_are_validated_like_any_new_detection(self):
+        restored = pf.Detection.from_dict({"bbox": [10.123456, 20, 30, 40], "confidence": 0.87654})
+
+        assert restored.bbox == [10.12, 20.0, 30.0, 40.0]
+        assert restored.confidence == 0.877
+        assert pf.Detection.from_dict({"bbox": [30, 20, 10, 40]}).bbox is None
+
+    def test_collection_keeps_order_and_count(self, sample_detections):
+        restored = pf.Detections.from_dict(sample_detections.to_dict())
+
+        assert isinstance(restored, pf.Detections)
+        assert len(restored) == len(sample_detections)
+        assert restored.to_dict() == sample_detections.to_dict()
+
+    def test_collection_drops_rows_that_describe_no_object(self):
+        restored = pf.Detections.from_dict([
+            {"bbox": [1, 2, 3, 4], "class_name": "kept"},
+            {"class_name": "no box"},
+            {"bbox": [1, 2, 3, 4], "confidence": float("nan")},
+        ])
+
+        assert [d.class_name for d in restored] == ["kept"]
+
+    def test_empty_collection(self):
+        assert len(pf.Detections.from_dict([])) == 0
+        assert len(pf.Detections.from_json("[]")) == 0
+        assert len(pf.Detections.from_json(pf.Detections().to_json())) == 0
+
+    def test_report_with_metrics_reads_too(self, sample_detections):
+        """Its rows carry extra keys, which are ignored like any other unknown key."""
+        rows = json.loads(sample_detections.to_json_with_metrics())
+
+        assert pf.Detections.from_dict(rows).to_dict() == sample_detections.to_dict()
+
+    def test_restored_result_behaves_like_a_fresh_one(self):
+        mask = np.zeros((100, 120), dtype=bool)
+        mask[10:40, 20:70] = True
+        stored = pf.from_arrays([[20, 10, 70, 40]], [0.9], masks=mask[None]).to_json()
+
+        restored = pf.Detections.from_json(stored).masks_to_segments()
+
+        assert sorted(restored[0].segments) == [[20.0, 10.0], [20.0, 40.0], [70.0, 10.0], [70.0, 40.0]]
+        assert len(restored.filter_by_confidence(0.5)) == 1
+
