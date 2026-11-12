@@ -94,6 +94,17 @@ detections = pf.from_easyocr(reader.readtext("sign.jpg"))
 detections = pf.from_arrays(boxes, scores, class_ids, labels=model.class_names)
 ```
 
+Segmentation models answer with raster masks. One call turns them into polygons,
+whichever model they came from:
+
+```python
+detections = pf.from_arrays(boxes, scores, masks=masks)   # boolean (N, H, W)
+detections.masks_to_segments()                            # fills det.segments
+detections.masks_to_segments(keep_masks=False)            # ...and drops the rasters
+
+polygon = pf.mask_to_polygon(mask)                        # or one mask at a time
+```
+
 ### Classifications - When the Model Only Names
 
 A classifier localises nothing, so its result carries no geometry at all:

@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-11-12
+
+Raster masks can now become polygons. Every segmentation model answers in pixels, and
+until now only the Ultralytics converter filled `segments`, by passing through polygons
+Ultralytics had computed itself. Any other source left `segments` empty, so its results
+could not be drawn as outlines or stored without the raster.
+
+### Added
+
+- **`pf.mask_to_polygon(mask, tolerance=1.5)`.** One raster in, one polygon out, in the
+  shape `Detection.segments` holds. It traces the outer boundary of the largest
+  4-connected region - holes and smaller islands are dropped, because `segments` is a
+  single outline - and simplifies it with Douglas-Peucker.
+
+  Vertices sit on pixel corners: a mask covering columns 10..19 spans x = 10 to x = 20.
+  `cv2.findContours` alone traces pixel centres, which shrinks every object by half a
+  pixel per side and gives a one-pixel-wide line zero area. The outermost vertex on each
+  side is never simplified away, so the box around the polygon equals the box around the
+  mask at any tolerance, and a filled rectangle returns exactly its four corners.
+
+  The default tolerance is 1.5 because the pixel staircase on a slanted edge is itself
+  about a pixel of noise: at 1.0 an 800 px object keeps ~240 points, at 1.5 it keeps ~50.
+
+- **`Detections.masks_to_segments(tolerance=1.5, keep_masks=True)`** and the same method
+  on `Detection`. Fills `segments` from each detection's raster and returns `self` for
+  chaining. Rasters stay in `masks` unless `keep_masks=False`. Detections with no raster,
+  or an empty one, are left unchanged. Existing `segments` are replaced where a raster is
+  present, which is also how Ultralytics' approximate polygons are brought onto the
+  pixel-corner convention.
+
+### Changed
+
+- **`simplify_polygon` runs on OpenCV instead of Shapely, and lives in
+  `pixelflow.masks`** (was `pixelflow.validators`). It returns `[[x, y], ...]`
+  rounded to two decimals and not closed, where it used to return tuples with the first
+  point repeated at the end. `preserve_topology` is still accepted and now ignored.
+  This reaches `Detection.simplify_masks()` and `Detections.simplify()`, which call it.
+  Shapely remains a dependency: zones are built on it.
+
+### Fixed
+
+- **`Detection.simplify_masks()` on a raster mask.** Its docstring promised rasters were
+  left unchanged, but every mask was handed to the polygon simplifier. Rasters now pass
+  through untouched.
+
 ## [0.5.0] - 2026-08-27
 
 Media I/O is rebuilt around one idea: **size is discovered, rate is declared.** A
