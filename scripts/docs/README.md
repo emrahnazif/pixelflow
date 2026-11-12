@@ -94,7 +94,7 @@ docs/
 
 ## Requirements
 
-- Python 3.9+
+- Python 3.10+
 - Standard library only (no external dependencies)
 - Properly structured docstrings in your Python files
 - `__all__` lists in your `__init__.py` files

@@ -44,6 +44,12 @@ could not be drawn as outlines or stored without the raster.
   This reaches `Detection.simplify_masks()` and `Detections.simplify()`, which call it.
   Shapely remains a dependency: zones are built on it.
 
+### Removed
+
+- **Python 3.9 support.** It reached end-of-life in October 2025 and GitHub's current
+  runner image no longer provides it, so it can no longer be tested. `requires-python`
+  is now `>=3.10`; pip on 3.9 keeps resolving to 0.5.0.
+
 ### Fixed
 
 - **`Detection.simplify_masks()` on a raster mask.** Its docstring promised rasters were

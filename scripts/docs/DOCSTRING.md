@@ -127,7 +127,7 @@ def function_name(
 - Import typing modules: `from typing import List, Optional, Union, Any`
 - Be specific: `List[Results]` instead of `List`
 - Use `Optional[Type]` instead of `Union[Type, None]`
-- Follow Python 3.9+ compatibility (use `Union[X, Y]` not `X | Y`)
+- Follow Python 3.10+ compatibility
 
 ### 5. **Cross-References** (Conditional)
 - **Include "See Also" only when related functions actually exist**
@@ -175,7 +175,7 @@ Document automatic validation behaviors:
 - [ ] Examples use realistic code and variable names
 - [ ] Raises section covers relevant exceptions
 - [ ] No unused imports in typing section
-- [ ] Follows Python 3.9+ compatibility requirements
+- [ ] Follows Python 3.10+ compatibility requirements
 - [ ] Examples show PixelFlow workflow (`outputs -> pf.from_*()`) when applicable
 - [ ] 3-4 examples covering different use cases
 - [ ] Notes section explains implementation details
