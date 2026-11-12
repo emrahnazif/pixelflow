@@ -29,6 +29,7 @@ from .media import (
     read_image, read_video, encode_image, display_video, display_image, save_image,
     close_display, to_pil, from_pil,
 )
+from .masks import mask_to_polygon
 from .zones import Zones
 from .crossings import Crossings
 from .slicer import SlicedInference, auto_slice_size
@@ -94,6 +95,9 @@ __all__ = [
     "close_display",
     "to_pil",
     "from_pil",
+
+    # Mask geometry
+    "mask_to_polygon",
 
     # Spatial analysis
     "zones",
