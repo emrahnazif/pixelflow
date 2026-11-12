@@ -17,6 +17,8 @@ jobs:
       # Required for Trusted Publishing: the runner mints a short-lived OIDC token
       # that PyPI verifies. No API token is stored anywhere.
       id-token: write
+      # Required to create the GitHub release once the upload has succeeded.
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -49,6 +51,11 @@ jobs:
             exit 1
           fi
 
+      # The GitHub release is written from the changelog, so a version with no
+      # section there is rejected here, before anything irreversible happens.
+      - name: Extract release notes from the changelog
+        run: python scripts/release_notes.py "$GITHUB_REF_NAME" > release-notes.md
+
       - name: Build sdist and wheel
         run: |
           pip install build
@@ -60,3 +67,15 @@ jobs:
           twine check dist/*
 
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+      # A tag alone notifies nobody and leaves the repository page showing whichever
+      # release was made by hand last. This runs after the upload so GitHub never
+      # announces a version that PyPI does not have.
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            --verify-tag
