@@ -19,6 +19,7 @@ from pixelflow.validators import (validate_bbox,
                                   round_coord,
                                   round_to_decimal,
                                   simplify_polygon)
+from pixelflow.masks import mask_to_polygon
 from typing import (List,
                     Iterator, Optional, Union, Any, Dict)
 
@@ -31,6 +32,11 @@ __all__ = ["KeyPoint", "Detection", "Detections"]
 # probability maps, int64, stacked 3D masks, empty arrays - use the raw
 # fallback in Detection.to_dict().
 _PNG_MASK_DTYPES = frozenset(("bool", "uint8", "uint16"))
+
+
+def _is_raster_mask(mask: Any) -> bool:
+    """Whether an entry of `Detection.masks` is a pixel raster rather than a polygon."""
+    return isinstance(mask, np.ndarray)
 
 
 def _is_png_encodable(mask: np.ndarray) -> bool:
@@ -170,6 +176,11 @@ class Detection:
                                     segments this field is not yet normalized to one shape.
         segments (Optional[List[List[float]]]): Object outline as one polygon, normalized by
                                     validate_segments to [[x, y], ...] at two decimals, or None.
+                                    Coordinates follow the pixel-corner convention bbox uses:
+                                    pixel (row i, column j) covers x from j to j + 1 and y
+                                    from i to i + 1. Polygons a model computed itself (the
+                                    Ultralytics converter passes them through) only
+                                    approximate this; masks_to_segments() makes them exact.
         keypoints (Optional[List[KeyPoint]]): List of KeyPoint objects for pose/structure data.
         class_id (Optional[Union[int, str]]): Numeric or string class identifier from model.
         class_name (Optional[str]): Human-readable class name (e.g., "person", "vehicle").
@@ -373,7 +384,7 @@ class Detection:
         if self.masks:
             serializable_masks = []
             for mask in self.masks:
-                if isinstance(mask, np.ndarray):
+                if _is_raster_mask(mask):
                     if _is_png_encodable(mask):
                         # Binary mask - PNG-encode, then base64 for JSON
                         # transport. PNG compresses masks losslessly; encoding
@@ -535,6 +546,77 @@ class Detection:
         if self.masks:
             # Apply the simplify function to each mask (assuming self.masks is a list of polygons)
             self.masks = [simplify_polygon(mask, tolerance, preserve_topology) for mask in self.masks]
+
+    def masks_to_segments(self, tolerance: float = 1.5, keep_masks: bool = True) -> bool:
+        """
+        Fill `segments` with the outline of this detection's raster mask.
+
+        Converts the raster in `masks` to one polygon with `mask_to_polygon` and
+        stores it in `segments`. Lets a result from any segmentation model be drawn,
+        stored or sent as a polygon without carrying the raster along.
+
+        Args:
+            tolerance (float): Simplification tolerance in pixels, passed to
+                              `mask_to_polygon`. Range: [0.0, inf). Default is 1.5.
+            keep_masks (bool): Whether to keep the raster in `masks` after converting.
+                              False drops it to save memory. Default is True.
+
+        Returns:
+            bool: True if `segments` was set, False if the detection was left unchanged.
+
+        Raises:
+            ValueError: If `tolerance` is negative.
+
+        Example:
+            >>> import numpy as np
+            >>> import pixelflow as pf
+            >>>
+            >>> mask = np.zeros((480, 640), dtype=bool)
+            >>> mask[100:200, 50:300] = True
+            >>> detection = pf.Detection(bbox=[50, 100, 300, 200], masks=[mask])
+            >>>
+            >>> # Fill segments, keep the raster for drawing
+            >>> detection.masks_to_segments()
+            True
+            >>> detection.segments
+            [[50.0, 100.0], [50.0, 200.0], [300.0, 200.0], [300.0, 100.0]]
+            >>>
+            >>> # Finer outline, raster dropped
+            >>> detection.masks_to_segments(tolerance=0.5, keep_masks=False)
+            True
+            >>> detection.masks is None
+            True
+
+        Notes:
+            - Modifies the detection in-place
+            - A detection with no mask, a polygon mask, or an empty raster is left
+              unchanged
+            - Existing `segments` are replaced when a raster is present: the raster
+              is what the model produced, and a polygon derived from it follows the
+              pixel-corner convention exactly
+            - Several rasters of the same shape are treated as parts of one object
+              and merged before tracing; `segments` still receives one outline
+            - With `keep_masks=False` only a converted raster is dropped. A raster
+              that produced no polygon stays, so no geometry is lost silently
+        """
+        if not self.masks:
+            return False
+
+        # Only a 2D raster can be traced; stacked or multi-channel arrays are left alone.
+        rasters = [m for m in self.masks if _is_raster_mask(m) and m.ndim == 2]
+        if not rasters:
+            return False
+        rasters = [m for m in rasters if m.shape == rasters[0].shape]
+
+        polygon = mask_to_polygon(np.logical_or.reduce(rasters), tolerance=tolerance)
+        if polygon is None:
+            return False
+
+        self.segments = polygon
+        if not keep_masks:
+            converted = {id(m) for m in rasters}
+            self.masks = [m for m in self.masks if id(m) not in converted] or None
+        return True
 
     def copy(self) -> "Detection":
         """
@@ -794,6 +876,60 @@ class Detections:
         """
         for detection in self.detections:
             detection.simplify_masks(tolerance=tolerance, preserve_topology=preserve_topology)
+        return self
+
+    def masks_to_segments(self, tolerance: float = 1.5, keep_masks: bool = True) -> 'Detections':
+        """
+        Fill `segments` from the raster mask of every detection in the collection.
+
+        Turns the output of any segmentation model into polygons: each detection's
+        raster in `masks` is traced along its pixel corners, simplified, and stored in
+        `segments`. Every source then shares one polygon convention, whichever model
+        produced it.
+
+        Args:
+            tolerance (float): Simplification tolerance in pixels. Higher values give
+                              fewer points. Range: [0.0, inf). Default is 1.5.
+            keep_masks (bool): Whether to keep the rasters in `masks` after
+                              converting. False drops them to save memory.
+                              Default is True.
+
+        Returns:
+            Detections: Returns self for method chaining.
+
+        Raises:
+            ValueError: If `tolerance` is negative.
+
+        Example:
+            >>> import pixelflow as pf
+            >>>
+            >>> # SAM-style output: boxes and boolean (N, H, W) masks
+            >>> detections = pf.from_arrays(boxes, scores, masks=masks)
+            >>> detections.masks_to_segments()
+            >>> detections[0].segments  # [[x, y], ...]
+            >>>
+            >>> # Draw outlines, which read `segments`
+            >>> image = pf.annotate.polygon(image, detections)
+            >>>
+            >>> # Keep only polygons, e.g. before serializing
+            >>> payload = detections.masks_to_segments(keep_masks=False).to_json()
+            >>>
+            >>> # Finer outlines at the cost of more points
+            >>> detections.masks_to_segments(tolerance=0.5)
+
+        Notes:
+            - Modifies detections in-place; order and every other field are untouched
+            - Detections without a raster mask, or with an empty one, are left unchanged
+            - Existing `segments` are replaced where a raster is present, which also
+              brings Ultralytics' own polygons onto the pixel-corner convention
+            - One outline per detection: holes and all but the largest region are
+              dropped. See `mask_to_polygon` for the exact rules
+
+        Performance Notes:
+            - A few milliseconds per detection at full-HD; cost follows object size
+        """
+        for detection in self.detections:
+            detection.masks_to_segments(tolerance=tolerance, keep_masks=keep_masks)
         return self
 
     def copy(self) -> "Detections":

@@ -1,7 +1,8 @@
 """
 Unit tests for raster-mask to polygon conversion.
 
-Covers pf.mask_to_polygon.
+Covers pf.mask_to_polygon, Detection.masks_to_segments and
+Detections.masks_to_segments.
 """
 
 import cv2
@@ -203,3 +204,111 @@ class TestMaskToPolygonRealSize:
         polygon = pf.mask_to_polygon(blob)
 
         assert polygon_area(polygon) == pytest.approx(blob.sum(), rel=1e-3)
+
+
+# ============================================================================
+# masks_to_segments
+# ============================================================================
+
+def segmentation_result():
+    """Three detections with raster masks, as a SAM-style model hands them over."""
+    masks = np.zeros((3, 100, 120), dtype=bool)
+    masks[0, 10:30, 10:50] = True
+    masks[1, 40:90, 60:110] = True
+    cv2.circle(masks[2].view(np.uint8), (40, 60), 25, 1, -1)
+    boxes = np.array([mask_bbox(m) for m in masks], dtype=float)
+    return pf.from_arrays(
+        boxes, scores=[0.9, 0.8, 0.7], class_ids=[2, 0, 1], masks=masks,
+        labels=["cat", "dog", "bird"],
+    ), masks, boxes
+
+
+class TestMasksToSegments:
+    """Test filling segments across a whole result."""
+
+    def test_fills_every_row_and_keeps_fields_aligned(self):
+        detections, masks, boxes = segmentation_result()
+        assert all(d.segments is None for d in detections)
+
+        returned = detections.masks_to_segments()
+
+        assert returned is detections
+        assert len(detections) == 3
+        for i, detection in enumerate(detections):
+            assert detection.segments == pf.mask_to_polygon(masks[i])
+            assert polygon_bbox(detection.segments) == detection.bbox == boxes[i].tolist()
+            assert np.array_equal(detection.masks[0], masks[i])
+        assert [d.class_id for d in detections] == [2, 0, 1]
+        assert [d.class_name for d in detections] == ["bird", "cat", "dog"]
+        assert [d.confidence for d in detections] == [0.9, 0.8, 0.7]
+
+    def test_keep_masks_false_drops_the_rasters(self):
+        detections, _, _ = segmentation_result()
+
+        detections.masks_to_segments(keep_masks=False)
+
+        assert all(d.masks is None for d in detections)
+        assert all(d.segments is not None for d in detections)
+
+    def test_tolerance_is_passed_through(self):
+        detections, masks, _ = segmentation_result()
+
+        detections.masks_to_segments(tolerance=0)
+
+        assert detections[2].segments == pf.mask_to_polygon(masks[2], tolerance=0)
+        assert len(detections[2].segments) > len(pf.mask_to_polygon(masks[2]))
+
+    def test_empty_mask_leaves_the_detection_unchanged(self):
+        empty = np.zeros((50, 50), dtype=bool)
+        detection = pf.Detection(bbox=[0, 0, 10, 10], masks=[empty])
+
+        assert detection.masks_to_segments(keep_masks=False) is False
+        assert detection.segments is None
+        assert detection.masks[0] is empty  # not dropped: nothing replaced it
+
+    def test_polygon_mask_and_missing_mask_are_left_unchanged(self):
+        quad = [[1.0, 1.0], [9.0, 1.0], [9.0, 9.0], [1.0, 9.0]]
+        with_polygon = pf.Detection(bbox=[1, 1, 9, 9], masks=[quad], segments=quad)
+        without_mask = pf.Detection(bbox=[1, 1, 9, 9], segments=quad)
+
+        assert with_polygon.masks_to_segments(keep_masks=False) is False
+        assert without_mask.masks_to_segments() is False
+        assert with_polygon.masks == [quad]
+        assert with_polygon.segments == without_mask.segments == quad
+
+    def test_raster_replaces_existing_segments(self):
+        """A model's own approximate polygon gives way to the exact outline."""
+        mask = np.zeros((50, 50), dtype=bool)
+        mask[10:20, 10:30] = True
+        approximate = [[10, 10], [29, 10], [29, 19], [10, 19]]  # pixel centres
+        detection = pf.Detection(bbox=[10, 10, 30, 20], masks=[mask], segments=approximate)
+
+        assert detection.masks_to_segments() is True
+        assert polygon_bbox(detection.segments) == [10, 10, 30, 20]
+
+    def test_several_rasters_are_merged_into_one_outline(self):
+        left = np.zeros((40, 40), dtype=bool)
+        right = np.zeros((40, 40), dtype=bool)
+        left[10:20, 5:20] = True
+        right[10:20, 20:35] = True
+        detection = pf.Detection(bbox=[5, 10, 35, 20], masks=[left, right])
+
+        detection.masks_to_segments()
+
+        assert polygon_bbox(detection.segments) == [5, 10, 35, 20]
+
+    def test_result_survives_serialization(self):
+        detections, _, _ = segmentation_result()
+
+        payload = detections.masks_to_segments(keep_masks=False).to_dict()
+
+        assert all(row["masks"] is None for row in payload)
+        assert payload[0]["segments"] == detections[0].segments
+
+    def test_polygon_annotator_draws_the_result(self):
+        detections, _, _ = segmentation_result()
+        image = np.zeros((100, 120, 3), dtype=np.uint8)
+
+        annotated = pf.annotate.polygon(image.copy(), detections.masks_to_segments())
+
+        assert annotated.any()
