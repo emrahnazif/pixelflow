@@ -119,7 +119,7 @@ result = pf.from_ultralytics_classification(model.predict("dog.jpg"))
 
 result.top1.class_name              # 'golden retriever'
 result.top_k(5)                     # -> Classifications, best first
-result.to_json()
+result.to_json()                    # pf.Classifications.from_json() reads it back
 
 # Plain scores - CLIP zero-shot, a vendored ResNet, anything with a score vector
 prompts = ["a photo of a cat", "a photo of a dog"]
@@ -408,6 +408,10 @@ df = pd.DataFrame(data)
 
 # With metrics
 report = detections.to_json_with_metrics()
+
+# And back - masks decoded, keypoints rebuilt, every field restored
+detections = pf.Detections.from_json(json_str)
+detections = pf.Detections.from_dict(data)
 ```
 
 ## Supported Frameworks

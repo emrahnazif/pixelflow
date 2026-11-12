@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-11-12
+
+Results can be read back. `to_dict()` and `to_json()` have always written a result
+out, but nothing read one in: a caller had to know which keys a `Detection` takes and
+decode each mask by hand, and every project that stored results kept its own copy of
+that list. A field added here then went missing there without anyone noticing.
+
+### Added
+
+- **`Detections.from_dict(items)` and `Detections.from_json(text)`**, with
+  `Detection.from_dict` and `KeyPoint.from_dict` underneath. The inverse of `to_dict()`
+  and `to_json()`: masks are decoded back to arrays with the pixels, dtype and shape they
+  were written with, keypoints become `KeyPoint` objects, and every other field is
+  restored.
+
+  Unknown keys are ignored and missing keys take the constructor's defaults, so a
+  dictionary written by another pixelflow version still reads. The field list is taken
+  from the constructor itself, and a test holds `to_dict()` to the same set, so the two
+  directions cannot drift apart.
+
+  Values go through the same validation as any new detection, and a collection is built
+  through `add_detection`: a row with no valid `bbox`, or a NaN confidence, is dropped
+  as it would be from a converter. Nothing `to_dict()` writes is affected. A mask in a
+  format `decode_mask` does not know raises instead of being dropped.
+
+  The restored result shares nothing with the dictionary it came from. `to_dict()` hands
+  out `metadata`, `zones` and the other containers by reference, so they are copied on
+  the way back in.
+
+- **`Classifications.from_dict(items)` and `Classifications.from_json(text)`**, with
+  `Classification.from_dict` underneath, under the same rules. `to_dict()` writes the
+  rows only, so the collection's own `inference_id` and `metadata` are not restored.
+
 ## [0.6.0] - 2026-11-12
 
 Raster masks can now become polygons. Every segmentation model answers in pixels, and
