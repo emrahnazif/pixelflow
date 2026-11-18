@@ -128,12 +128,14 @@ key; `close_display()` closes every window.
 
 ## PIL images
 
-`to_pil(image)` turns an array into a PIL image, and `from_pil(pil_image)` turns it back. The
-array keeps the PIL image's mode: a PNG with transparency gives four channels and a grayscale
-image gives two dimensions. Convert first so that every array is RGB:
+`to_pil(image)` turns an array into a PIL image, and `from_pil(pil_image)` turns a PIL image
+into an RGB array:
 
 ```python
 from PIL import Image
 
-image = pf.from_pil(Image.open("logo.png").convert("RGB"))
+image = pf.from_pil(Image.open("logo.png"))
 ```
+
+Whatever the PIL image's mode, the array is RGB `uint8` with three channels, as with
+`read_image`: grayscale gets three channels, and an alpha channel is dropped with a warning.

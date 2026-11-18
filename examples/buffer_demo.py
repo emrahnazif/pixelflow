@@ -77,6 +77,8 @@ while True:
     # Buffer the frame and results
     # Returns middle frame/results once buffer is full
     results, frame = buffer.update(results, frame)
+    if frame is None:  # the first `delay` frames: nothing is ready yet
+        continue
     
     # Track when buffer becomes full
     if buffer.is_full and buffer_filled_at == 0:

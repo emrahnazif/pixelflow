@@ -168,6 +168,21 @@ def _require_rgb(image, what: str = "frame") -> None:
         )
 
 
+def _has_alpha(image: Image.Image) -> bool:
+    """Whether a PIL image carries transparency that converting to RGB discards."""
+    return image.mode in ("RGBA", "LA", "PA") or (
+        image.mode == "P" and "transparency" in image.info
+    )
+
+
+def _warn_alpha_dropped(label: str = "", stacklevel: int = 3) -> None:
+    warnings.warn(
+        f"{label}alpha channel dropped. PixelFlow images are RGB uint8 HxWx3; "
+        f"transparent areas keep the colour stored beneath them.",
+        stacklevel=stacklevel,
+    )
+
+
 def _warn_if_alpha_dropped(handle, label: str = "") -> None:
     """Warn if the source carried an alpha channel that decoding discarded.
 
@@ -180,17 +195,11 @@ def _warn_if_alpha_dropped(handle, label: str = "") -> None:
     """
     try:
         with Image.open(handle) as probe:
-            had_alpha = probe.mode in ("RGBA", "LA", "PA") or (
-                probe.mode == "P" and "transparency" in probe.info
-            )
+            had_alpha = _has_alpha(probe)
     except Exception:
         return
     if had_alpha:
-        warnings.warn(
-            f"{label}alpha channel dropped. PixelFlow images are RGB uint8 HxWx3; "
-            f"transparent areas keep the colour stored beneath them.",
-            stacklevel=3,
-        )
+        _warn_alpha_dropped(label, stacklevel=4)
 
 
 def _valid_fps(value) -> Optional[float]:
@@ -957,5 +966,15 @@ def to_pil(image: np.ndarray) -> Image.Image:
 
 
 def from_pil(image: Image.Image) -> np.ndarray:
-    """Convert a PIL Image to an RGB numpy array."""
-    return np.array(image)
+    """Convert a PIL Image to an RGB uint8 HxWx3 array.
+
+    Every mode is converted to RGB, as ``read_image`` does for files: grayscale gains three
+    channels, palette images are expanded, and an alpha channel is dropped with a warning.
+    Returning ``np.array(image)`` as it was gave 4 channels for RGBA and 2 dimensions for
+    grayscale, which the rest of PixelFlow does not take.
+    """
+    if image.mode == "RGB":
+        return np.array(image)
+    if _has_alpha(image):
+        _warn_alpha_dropped(stacklevel=3)
+    return np.array(image.convert("RGB"))

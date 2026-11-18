@@ -1,20 +1,18 @@
 """
 Buffer module for temporal frame and results management.
 
-This module provides a rolling window buffer that collects frames and their
-corresponding detection results, enabling temporal context for downstream processing.
-The buffer implements a delay-based temporal processing approach, returning the middle
-frame once the buffer is full, which provides both past and future context for advanced
-computer vision operations like motion smoothing, temporal interpolation, and trajectory analysis.
+A rolling window of frames and their results. ``update`` hands back the frame ``delay``
+frames ago, so that for the frame being processed both the frames before it and the frames
+after it are known. Every frame comes out exactly once: the first ones as soon as their
+future is known (with less past), the last ones from ``flush`` when the video ends.
 """
 
 from collections import deque
-from typing import Optional, Tuple, List, Union, Any, Dict
+from typing import Optional, Tuple, List, Union, Any, Dict, Iterator
 import warnings
 
 import numpy as np
 
-from pixelflow.detections import Detections
 
 
 class Buffer:
@@ -39,35 +37,22 @@ class Buffer:
         is_full (bool): Whether the buffer has reached capacity
         
     Example:
-        >>> import cv2
         >>> import pixelflow as pf
-        >>> from ultralytics import YOLO
-        >>> 
-        >>> # Setup model and buffer
-        >>> model = YOLO("yolo11l.pt")
+        >>>
         >>> buffer = pf.Buffer(frames=5)  # 2 past + 1 current + 2 future
-        >>> 
-        >>> # Process video with temporal context
-        >>> cap = cv2.VideoCapture("video.mp4")
-        >>> while True:
-        ...     ret, frame = cap.read()
-        ...     if not ret:
-        ...         break
-        ...         
-        ...     # Get raw model outputs and convert to PixelFlow format
-        ...     outputs = model.predict(frame)
-        ...     results = pf.from_ultralytics(outputs)
-        ...     
-        ...     # Update buffer and get temporally-delayed frame
-        ...     buffered_results, buffered_frame = buffer.update(results, frame)
-        ...     
-        ...     # Process with temporal context (if buffer is full)
-        ...     if buffer.is_full:
-        ...         temporal_ctx = buffer.get_temporal_context()
-        ...         # Use past/future frames for smoothing or prediction
-    
+        >>> for frame in pf.VideoReader("video.mp4"):
+        ...     results, frame = buffer.update(model_results(frame), frame)
+        ...     if frame is None:          # the first `delay` calls
+        ...         continue
+        ...     context = buffer.get_temporal_context()
+        ...     process(results, frame, context)
+        >>> for results, frame in buffer.flush():  # the last `delay` frames
+        ...     process(results, frame, buffer.get_temporal_context())
+
     Notes:
         - Buffer introduces a delay equal to buffer_size // 2 frames
+        - Every frame is returned once: by update(), or by flush() for the last ones
+        - Near the start and the end, the context has fewer past or future frames
         - Odd buffer sizes provide clean middle frame alignment
         - Even buffer sizes will still work but with slight offset
         - Memory usage scales linearly with buffer size and frame resolution
@@ -130,104 +115,78 @@ class Buffer:
         self.buffer_size = frames
         self.frame_buffer: deque = deque(maxlen=frames)
         self.results_buffer: deque = deque(maxlen=frames)
-        self.is_full = False
         self._frame_count = 0
+        self._current: Optional[int] = None
+
+    @property
+    def is_full(self) -> bool:
+        """Whether the buffer holds ``frames`` frames."""
+        return len(self.frame_buffer) == self.buffer_size
     
-    def update(self, results: Any, frame: np.ndarray) -> Tuple[Any, np.ndarray]:
+    def update(self, results: Any, frame: np.ndarray) -> Tuple[Any, Optional[np.ndarray]]:
         """
-        Add new frame and results to buffer, return temporally-delayed middle frame.
-        
-        This method implements the core rolling window algorithm that maintains a
-        fixed-size temporal buffer. It adds the current frame and results to the end
-        of the buffer, removes the oldest items if capacity is exceeded, and returns
-        the middle frame once the buffer reaches full capacity. This provides temporal
-        context with both past and future frames available.
-        
+        Add a frame and its results; return the frame ``delay`` frames back, with its results.
+
+        The frame handed back is the one with ``delay`` frames after it in the buffer, so its
+        future is known. The first frames come out as soon as that is true, with fewer frames
+        before them; no frame is skipped. Until the first one is ready (the first ``delay``
+        calls), there is nothing to return and ``update`` returns ``(None, None)``.
+
+        At the end of the video, the last ``delay`` frames are still in the buffer: get them
+        with :meth:`flush`.
+
         Args:
-            results (Any): Detection results for the current frame. Can be any type
-                          (Detections, list, dict, etc.) that represents detection outputs.
-                          Results are stored as-is without validation.
-            frame (np.ndarray): Current video frame as numpy array. Shape: (H, W, C)
-                               or (H, W). Frame is copied to prevent external modifications.
-                               
+            results (Any): Results for this frame: ``Detections``, a count, anything. Stored
+                as given.
+            frame (np.ndarray): The frame. It is copied, so the caller may draw on its own.
+
         Returns:
-            Tuple[Any, np.ndarray]: Tuple of (buffered_results, buffered_frame):
-                - If buffer not full: (empty_results, black_frame) matching input types
-                - If buffer full: (middle_results, middle_frame) from temporal center
-                
-        Raises:
-            AttributeError: If frame does not have numpy array interface.
-            ValueError: If frame is empty or has invalid dimensions.
-            MemoryError: If frame copy fails due to insufficient memory.
-            
+            Tuple[Any, Optional[np.ndarray]]: ``(results, frame)`` of the frame ``delay``
+            frames back, or ``(None, None)`` while the buffer holds ``delay`` frames or fewer.
+
         Example:
-            >>> import cv2
-            >>> import pixelflow as pf
-            >>> from ultralytics import YOLO
-            >>> 
-            >>> # Setup model and buffer
-            >>> model = YOLO("yolo11l.pt")
             >>> buffer = pf.Buffer(frames=5)
-            >>> 
-            >>> # Process single frame
-            >>> frame = cv2.imread("frame001.jpg")
-            >>> outputs = model.predict(frame)
-            >>> results = pf.from_ultralytics(outputs)
-            >>> buffered_results, buffered_frame = buffer.update(results, frame)
-            >>> 
-            >>> # Process video stream with temporal buffering
-            >>> cap = cv2.VideoCapture("video.mp4")
-            >>> for frame_idx in range(100):
-            ...     ret, frame = cap.read()
-            ...     outputs = model.predict(frame)
-            ...     results = pf.from_ultralytics(outputs)
-            ...     
-            ...     # Get temporally-buffered frame (delayed by buffer_size//2)
-            ...     delayed_results, delayed_frame = buffer.update(results, frame)
-            ...     
-            ...     # Use delayed results for temporal analysis
-            ...     if buffer.is_full:
-            ...         print(f"Processing frame {frame_idx - buffer.delay}")
-            >>> 
-            >>> # Handle different result types
-            >>> custom_results = {"boxes": [[100, 100, 200, 200]], "confidence": [0.9]}
-            >>> delayed_custom, delayed_frame = buffer.update(custom_results, frame)
-        
-        Notes:
-            - Frame delay equals buffer_size // 2 frames
-            - Frames are deep copied to prevent external modifications
-            - Empty results type matches input when buffer not full
-            - Rolling window automatically maintains buffer size
-            - Frame counter increments with each update
-            - Memory usage grows until buffer is full, then remains constant
-            
-        Performance Notes:
-            - Frame copy overhead: ~10-20% for typical resolutions
-            - Buffer operations: O(1) amortized time complexity
-            - Memory usage: constant after initial fill period
-            - Consider frame resolution vs processing speed trade-offs
+            >>> for frame in pf.VideoReader("video.mp4"):
+            ...     results, frame = buffer.update(model_results(frame), frame)
+            ...     if frame is None:
+            ...         continue
+            ...     process(results, frame)
+            >>> for results, frame in buffer.flush():
+            ...     process(results, frame)
         """
-        # Add new frame and results to buffers (deque handles maxlen automatically)
         self.frame_buffer.append(frame.copy())
         self.results_buffer.append(results)
         self._frame_count += 1
 
-        # Check if buffer is full
-        if len(self.frame_buffer) >= self.buffer_size:
-            self.is_full = True
-            # Return middle frame and results
-            middle_idx = self.buffer_size // 2
-            return self.results_buffer[middle_idx], self.frame_buffer[middle_idx]
-        else:
-            # Buffer not full yet, return black frame with empty results
-            black_frame = np.zeros_like(frame)
-            try:
-                empty_results = Detections()
-            except Exception:
-                empty_results = None
+        index = len(self.frame_buffer) - 1 - self.delay
+        if index < 0:
+            self._current = None
+            return None, None
 
-            return empty_results, black_frame
-    
+        self._current = index
+        return self.results_buffer[index], self.frame_buffer[index]
+
+    def flush(self) -> Iterator[Tuple[Any, np.ndarray]]:
+        """
+        Yield ``(results, frame)`` for the frames still waiting in the buffer, oldest first.
+
+        Call it once the video has ended: these are the last ``delay`` frames, which
+        :meth:`update` has not returned because no frames came after them. While each one is
+        yielded, :meth:`get_temporal_context` describes it, with fewer future frames. Once
+        all are out, the buffer is empty, ready for the next video.
+
+        Example:
+            >>> for results, frame in buffer.flush():
+            ...     process(results, frame)
+        """
+        start = 0 if self._current is None else self._current + 1
+        for index in range(start, len(self.frame_buffer)):
+            self._current = index
+            yield self.results_buffer[index], self.frame_buffer[index]
+        # Every frame is out; empty the buffer so the next update starts a new video
+        # instead of mixing its frames with this one's.
+        self.reset()
+
     def get_buffer_contents(self) -> Tuple[List[Any], List[np.ndarray]]:
         """
         Get complete copies of current buffer contents.
@@ -287,8 +246,10 @@ class Buffer:
         smoothing, and temporal consistency checks.
         
         Returns:
-            Optional[Dict]: Dictionary with temporal context structure, or None if
-                          buffer is not full. When available, contains:
+            Optional[Dict]: Dictionary with temporal context structure, or None before
+                          the first frame is returned. ``past_*`` holds fewer than
+                          ``delay`` entries near the start and ``future_*`` fewer near
+                          the end (during ``flush``). When available, contains:
                 - 'past_frames': List[np.ndarray] of frames before current
                 - 'past_results': List[Any] of results before current  
                 - 'current_frame': np.ndarray of the middle/current frame
@@ -336,7 +297,7 @@ class Buffer:
             ...     interpolated = cv2.addWeighted(past_frame, 0.3, current_frame, 0.7, 0)
         
         Notes:
-            - Returns None until buffer reaches full capacity
+            - Returns None until update() returns its first frame
             - Past/future lists may be empty for buffer_size <= 1
             - Arrays are references to original buffer contents
             - Middle index calculation: buffer_size // 2
@@ -346,21 +307,20 @@ class Buffer:
         See Also:
             get_buffer_contents : Get raw buffer contents without structure
         """
-        if not self.is_full:
+        if self._current is None:
             return None
-        
-        middle_idx = self.buffer_size // 2
-        
+
+        index = self._current
         frames = list(self.frame_buffer)
         results = list(self.results_buffer)
 
         return {
-            'past_frames': frames[:middle_idx],
-            'past_results': results[:middle_idx],
-            'current_frame': frames[middle_idx],
-            'current_results': results[middle_idx],
-            'future_frames': frames[middle_idx + 1:],
-            'future_results': results[middle_idx + 1:],
+            'past_frames': frames[:index],
+            'past_results': results[:index],
+            'current_frame': frames[index],
+            'current_results': results[index],
+            'future_frames': frames[index + 1:],
+            'future_results': results[index + 1:],
         }
     
     def reset(self) -> None:
@@ -395,8 +355,8 @@ class Buffer:
         """
         self.frame_buffer.clear()
         self.results_buffer.clear()
-        self.is_full = False
         self._frame_count = 0
+        self._current = None
     
     @property
     def frames_processed(self) -> int:

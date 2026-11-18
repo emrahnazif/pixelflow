@@ -28,6 +28,48 @@ __all__ = [
 
 
 # ============================================================================
+# Shared geometry
+# ============================================================================
+
+def _rotation_matrix(
+    h: int, w: int, angle: float, center: Optional[Tuple[float, float]] = None
+) -> Tuple[np.ndarray, int, int]:
+    """The 2x3 matrix ``rotate`` applies, and the size of the canvas it rotates onto.
+
+    The canvas grows so nothing is cut, and the matrix includes the shift onto it. The one
+    place this arithmetic lives: ``rotate`` and ``rotate_detections`` both call it, so an
+    image and its detections always turn by the same matrix.
+    """
+    if center is None:
+        center = (w / 2.0, h / 2.0)
+    matrix = cv2.getRotationMatrix2D(tuple(center), angle, 1.0)
+    cos = np.abs(matrix[0, 0])
+    sin = np.abs(matrix[0, 1])
+    new_w = int((h * sin) + (w * cos))
+    new_h = int((h * cos) + (w * sin))
+    matrix[0, 2] += (new_w / 2) - center[0]
+    matrix[1, 2] += (new_h / 2) - center[1]
+    return matrix, new_w, new_h
+
+
+def _clip_box(bbox, h: int, w: int) -> Tuple[int, int, int, int]:
+    """``[x1, y1, x2, y2]`` clipped to an ``h`` x ``w`` image, as the ints ``crop`` slices by."""
+    x1, y1, x2, y2 = bbox
+    return (
+        int(max(0, min(x1, w))),
+        int(max(0, min(y1, h))),
+        int(max(0, min(x2, w))),
+        int(max(0, min(y2, h))),
+    )
+
+
+def _apply_affine(matrix: np.ndarray, points) -> list:
+    """Apply a 2x3 affine matrix to ``(x, y)`` points; return a list of ``[x, y]``."""
+    coords = np.asarray(points, dtype=np.float64).reshape(-1, 1, 2)
+    return cv2.transform(coords, matrix).reshape(-1, 2).tolist()
+
+
+# ============================================================================
 # Geometric Operations
 # ============================================================================
 
@@ -125,9 +167,8 @@ def rotate(
     Example:
         ```python
         import pixelflow as pf
-        import cv2
 
-        image = cv2.imread("image.jpg")
+        image = pf.read_image("image.jpg")
         rotated = pf.transform.rotate(image, angle=45)
         ```
 
@@ -137,24 +178,7 @@ def rotate(
         - Edge pixels are replicated if fillcolor is None
     """
     h, w = image.shape[:2]
-
-    # Use image center if center not provided
-    if center is None:
-        center = (w / 2.0, h / 2.0)
-
-    # Get rotation matrix
-    rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
-
-    # Calculate new image dimensions
-    cos = np.abs(rotation_matrix[0, 0])
-    sin = np.abs(rotation_matrix[0, 1])
-
-    new_w = int((h * sin) + (w * cos))
-    new_h = int((h * cos) + (w * sin))
-
-    # Adjust rotation matrix for new dimensions
-    rotation_matrix[0, 2] += (new_w / 2) - center[0]
-    rotation_matrix[1, 2] += (new_h / 2) - center[1]
+    rotation_matrix, new_w, new_h = _rotation_matrix(h, w, angle, center)
 
     # Determine fill strategy
     if fillcolor is not None:
@@ -189,9 +213,8 @@ def flip_horizontal(image: np.ndarray) -> np.ndarray:
     Example:
         ```python
         import pixelflow as pf
-        import cv2
 
-        image = cv2.imread("image.jpg")
+        image = pf.read_image("image.jpg")
         flipped = pf.transform.flip_horizontal(image)
         ```
     """
@@ -211,9 +234,8 @@ def flip_vertical(image: np.ndarray) -> np.ndarray:
     Example:
         ```python
         import pixelflow as pf
-        import cv2
 
-        image = cv2.imread("image.jpg")
+        image = pf.read_image("image.jpg")
         flipped = pf.transform.flip_vertical(image)
         ```
     """
@@ -234,9 +256,8 @@ def crop(image: np.ndarray, bbox: list) -> np.ndarray:
     Example:
         ```python
         import pixelflow as pf
-        import cv2
 
-        image = cv2.imread("image.jpg")
+        image = pf.read_image("image.jpg")
         cropped = pf.transform.crop(image, [100, 50, 500, 400])
         ```
 
@@ -244,14 +265,7 @@ def crop(image: np.ndarray, bbox: list) -> np.ndarray:
         - Coordinates are clipped to image boundaries
         - Returns empty array if bbox is invalid
     """
-    x1, y1, x2, y2 = bbox
-    h, w = image.shape[:2]
-
-    # Clip to image boundaries
-    x1 = int(max(0, min(x1, w)))
-    y1 = int(max(0, min(y1, h)))
-    x2 = int(max(0, min(x2, w)))
-    y2 = int(max(0, min(y2, h)))
+    x1, y1, x2, y2 = _clip_box(bbox, *image.shape[:2])
 
     # Crop
     return image[y1:y2, x1:x2]
@@ -280,9 +294,8 @@ def clahe(
     Example:
         ```python
         import pixelflow as pf
-        import cv2
 
-        image = cv2.imread("image.jpg")
+        image = pf.read_image("image.jpg")
         enhanced = pf.transform.clahe(image, clip_limit=2.0, tile_size=(8, 8))
         ```
 
@@ -321,9 +334,8 @@ def to_grayscale(
     Example:
         ```python
         import pixelflow as pf
-        import cv2
 
-        image = cv2.imread("image.jpg")
+        image = pf.read_image("image.jpg")
 
         # Single channel grayscale
         gray = pf.transform.to_grayscale(image)
@@ -358,9 +370,8 @@ def auto_contrast(
     Example:
         ```python
         import pixelflow as pf
-        import cv2
 
-        image = cv2.imread("image.jpg")
+        image = pf.read_image("image.jpg")
         enhanced = pf.transform.auto_contrast(image, cutoff=1.0)
         ```
 
@@ -426,9 +437,8 @@ def normalize(
     Example:
         ```python
         import pixelflow as pf
-        import cv2
 
-        image = cv2.imread("image.jpg")
+        image = pf.read_image("image.jpg")
 
         # ImageNet normalization
         normalized = pf.transform.normalize(
@@ -471,7 +481,8 @@ def gamma_correction(
 
     Args:
         image: Input image (H, W, 3) RGB format or (H, W) grayscale
-        gamma: Gamma value. <1 brightens, >1 darkens, =1 no change.
+        gamma: Gamma value. >1 brightens, <1 darkens, =1 no change. Each pixel becomes
+            255 * (value / 255) ** (1 / gamma).
 
     Returns:
         Gamma-corrected image
@@ -479,15 +490,14 @@ def gamma_correction(
     Example:
         ```python
         import pixelflow as pf
-        import cv2
 
-        image = cv2.imread("image.jpg")
+        image = pf.read_image("image.jpg")
 
         # Brighten
-        brightened = pf.transform.gamma_correction(image, gamma=0.5)
+        brightened = pf.transform.gamma_correction(image, gamma=2.0)
 
         # Darken
-        darkened = pf.transform.gamma_correction(image, gamma=2.0)
+        darkened = pf.transform.gamma_correction(image, gamma=0.5)
         ```
 
     Note:
@@ -515,9 +525,8 @@ def standardize(image: np.ndarray) -> np.ndarray:
     Example:
         ```python
         import pixelflow as pf
-        import cv2
 
-        image = cv2.imread("image.jpg")
+        image = pf.read_image("image.jpg")
         standardized = pf.transform.standardize(image)
         ```
 

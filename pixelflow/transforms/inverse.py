@@ -5,11 +5,14 @@ Automatically reverses detection transforms by reading transform history from me
 Supports chained transforms with LIFO (last-in-first-out) reversal order.
 """
 
+import warnings
+
 import cv2
 import numpy as np
-import math
-from typing import Optional
+
 from ..detections.detections import Detections
+from .detections import _translate_detection, _warp_detection
+from .image import _rotation_matrix
 
 __all__ = ['inverse_transforms']
 
@@ -36,32 +39,30 @@ def inverse_transforms(
     Example:
         ```python
         import pixelflow as pf
-        import cv2
 
-        # Load original image
-        original_img = cv2.imread("image.jpg")
-        detections = model.predict(original_img)
+        image = pf.read_image("image.jpg")
+        detections = pf.from_mayaku(predictor("image.jpg"), labels=predictor.class_names)
 
         # Apply transform chain
-        img, dets = pf.transform.rotate_detections(original_img, detections, 45)
+        img, dets = pf.transform.rotate_detections(image, detections, 45)
         img, dets = pf.transform.crop_detections(img, dets, [100, 50, 500, 400])
         img, dets = pf.transform.flip_horizontal_detections(img, dets)
 
-        # Run inference on transformed image
-        results = model.predict(img)
-
-        # Automatically undo ALL transforms
-        original_coords = pf.transform.inverse_transforms(results)
-
-        # Now coordinates match original image
-        annotated = pf.annotate.box(original_img, original_coords)
+        # Undo all of them, last first
+        restored = pf.transform.inverse_transforms(dets)
+        annotated = pf.annotate.box(image, restored)
         ```
+
+        The history lives on the detections that went through the transforms. Results of
+        a model run on the transformed image have none, so there is nothing to invert.
 
     Note:
         - Transforms are reversed in LIFO order (last applied, first undone)
         - Skips non-spatial transforms (e.g., update_bbox_from_keypoints)
-        - Uses detections.copy() for immutable operation
-        - Modifies coordinates in-place for performance
+        - Returns new Detections; the ones passed in are not modified
+        - Boxes come back exactly when they were not changed between the transforms and
+          the inverse. A box changed after a rotation comes back as the upright box around
+          the turned-back box; one changed after a crop comes back cut where it was cut
         - Clear history to prevent double-inversion if applied twice
     """
     # Create deep copy to avoid modifying original
@@ -80,6 +81,7 @@ def inverse_transforms(
         # Reverse transforms in LIFO order (last applied, first undone)
         for transform in reversed(transforms):
             transform_type = transform.get('type')
+            unchanged = _bbox_unchanged(detection.bbox, transform.get('bbox_after'))
 
             if transform_type == 'rotate':
                 _inverse_rotate(detection, transform)
@@ -100,6 +102,11 @@ def inverse_transforms(
                 # Skip - not a spatial transform, no inverse needed
                 pass
 
+            # Rotations and crops lose box information (envelope, cut). When the box is
+            # still the one the transform produced, the recorded original is exact.
+            if unchanged and transform.get('bbox_before') is not None:
+                detection.bbox = list(transform['bbox_before'])
+
         # Clear transform history if requested
         if clear_history:
             detection.metadata['transforms'] = []
@@ -107,101 +114,22 @@ def inverse_transforms(
     return inverse_detections
 
 
-def _unrotate_point(x, y, dx, dy, cx, cy, cos_a, sin_a):
-    """Map one point from rotated space back to its pre-rotation position.
-
-    Takes the matrix offsets and centre pre-unpacked as plain floats rather than
-    indexing them per point: read inside the loop they arrive as numpy scalars,
-    and every arithmetic op below then costs several times what it should.
-    """
-    x_centered = x - dx - cx
-    y_centered = y - dy - cy
-    return [
-        x_centered * cos_a - y_centered * sin_a + cx,
-        x_centered * sin_a + y_centered * cos_a + cy,
-    ]
+def _bbox_unchanged(bbox, recorded, tolerance=1e-6):
+    """Whether ``bbox`` is still the box a transform recorded as its output."""
+    if bbox is None or recorded is None:
+        return False
+    return all(abs(a - b) <= tolerance for a, b in zip(bbox, recorded))
 
 
 def _inverse_rotate(detection, metadata):
-    """Inverse rotation - rotate by negative angle."""
-    angle = metadata['angle']
-    center = metadata['center']
-    original_size = metadata['original_size']
-    h, w = original_size
-
-    # Calculate inverse rotation (negative angle)
-    inverse_angle = -angle
-    angle_rad = math.radians(inverse_angle)
-    cos_a = math.cos(angle_rad)
-    sin_a = math.sin(angle_rad)
-
-    # Get rotation matrix (same as forward transform setup)
-    rotation_matrix = cv2.getRotationMatrix2D(center, -angle, 1.0)
-
-    # Current image dimensions (after rotation)
-    # Calculate what they would be
-    cos = np.abs(rotation_matrix[0, 0])
-    sin = np.abs(rotation_matrix[0, 1])
-    new_w = int((h * sin) + (w * cos))
-    new_h = int((h * cos) + (w * sin))
-
-    # Adjust rotation matrix for canvas expansion (inverse)
-    rotation_matrix[0, 2] += (new_w / 2) - center[0]
-    rotation_matrix[1, 2] += (new_h / 2) - center[1]
-
-    dx, dy = float(rotation_matrix[0, 2]), float(rotation_matrix[1, 2])
-    cx, cy = float(center[0]), float(center[1])
-
-    # Transform bbox
-    if detection.bbox is not None:
-        x1, y1, x2, y2 = detection.bbox
-        corners = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
-        rotated_corners = [
-            _unrotate_point(x, y, dx, dy, cx, cy, cos_a, sin_a) for x, y in corners
-        ]
-
-        xs = [pt[0] for pt in rotated_corners]
-        ys = [pt[1] for pt in rotated_corners]
-        detection.bbox = [min(xs), min(ys), max(xs), max(ys)]
-
-    # Transform keypoints
-    if detection.keypoints is not None:
-        detection.keypoints = [
-            kp.with_xy(*_unrotate_point(kp.x, kp.y, dx, dy, cx, cy, cos_a, sin_a))
-            for kp in detection.keypoints
-        ]
-
-    # Transform segments
-    if detection.segments is not None:
-        detection.segments = [
-            _unrotate_point(x, y, dx, dy, cx, cy, cos_a, sin_a)
-            for x, y in detection.segments
-        ]
-
-    # Transform masks (rotate back)
-    if detection.masks is not None:
-        new_masks = []
-        for mask in detection.masks:
-            if isinstance(mask, np.ndarray):
-                # Calculate original dimensions for mask rotation
-                rotated_mask = cv2.warpAffine(
-                    mask.astype(np.uint8),
-                    cv2.getRotationMatrix2D(center, -angle, 1.0),
-                    (w, h),
-                    borderMode=cv2.BORDER_CONSTANT,
-                    borderValue=0
-                ).astype(bool)
-                new_masks.append(rotated_mask)
-            else:
-                # Polygon mask
-                if isinstance(mask, list):
-                    new_masks.append([
-                        _unrotate_point(x, y, dx, dy, cx, cy, cos_a, sin_a)
-                        for x, y in mask
-                    ])
-                else:
-                    new_masks.append(mask)
-        detection.masks = new_masks
+    """Undo a rotation by warping with the inverse of the matrix the rotation applied."""
+    h, w = metadata['original_size']
+    if 'matrix' in metadata:
+        forward = np.array(metadata['matrix'], dtype=np.float64)
+    else:
+        # History recorded before the matrix was: rebuild it the way rotate_detections did.
+        forward, _, _ = _rotation_matrix(h, w, metadata['angle'], metadata['center'])
+    _warp_detection(detection, cv2.invertAffineTransform(forward), (h, w))
 
 
 def _inverse_flip_horizontal(detection, metadata):
@@ -281,75 +209,24 @@ def _inverse_flip_vertical(detection, metadata):
 
 
 def _inverse_crop(detection, metadata):
-    """Inverse crop - add crop offset back to coordinates."""
-    crop_bbox = metadata['bbox']
-    x1_offset, y1_offset = crop_bbox[0], crop_bbox[1]
-
-    # Transform bbox (add crop offset)
-    if detection.bbox is not None:
-        x1, y1, x2, y2 = detection.bbox
-        detection.bbox = [
-            x1 + x1_offset,
-            y1 + y1_offset,
-            x2 + x1_offset,
-            y2 + y1_offset
-        ]
-
-    # Transform keypoints
-    if detection.keypoints is not None:
-        new_keypoints = []
-        for kp in detection.keypoints:
-            new_kp = kp.with_xy(kp.x + x1_offset, kp.y + y1_offset)
-            new_keypoints.append(new_kp)
-        detection.keypoints = new_keypoints
-
-    # Transform segments
-    if detection.segments is not None:
-        detection.segments = [
-            [x + x1_offset, y + y1_offset] for x, y in detection.segments
-        ]
-
-    # Masks remain in cropped space (can't expand back without original image size)
+    """Inverse crop - add the crop offset back; raster masks go back to the original size."""
+    x1, y1 = metadata['bbox'][0], metadata['bbox'][1]
+    _translate_detection(detection, x1, y1, canvas_shape=metadata.get('original_size'))
 
 
 def _inverse_add_padding(detection, metadata):
-    """Inverse add_padding - subtract padding from bbox."""
-    padding = metadata['padding']
-    reference = metadata['reference']
-
+    """Inverse add_padding - subtract the padding, in the pixels add_padding recorded."""
     if detection.bbox is None:
         return
-
+    pixels = metadata.get('pixels')
+    if pixels is None:
+        # The padding cannot be recomputed from the padded box, whose sides are longer.
+        warnings.warn(
+            "add_padding history without its pixel amounts (written by an older version) "
+            "cannot be undone exactly; the box is left padded.",
+            stacklevel=3,
+        )
+        return
+    pad_left, pad_top, pad_right, pad_bottom = pixels
     x1, y1, x2, y2 = detection.bbox
-    bbox_w = x2 - x1
-    bbox_h = y2 - y1
-
-    # Calculate reference dimension (same logic as add_padding)
-    if reference == 'shorter':
-        ref_dim = min(bbox_w, bbox_h)
-    elif reference == 'longer':
-        ref_dim = max(bbox_w, bbox_h)
-    elif reference == 'width':
-        ref_dim = bbox_w
-    elif reference == 'height':
-        ref_dim = bbox_h
-    else:
-        return  # Unknown reference, skip
-
-    # Calculate padding values
-    if isinstance(padding, dict):
-        pad_left = padding.get('left', 0) * ref_dim
-        pad_right = padding.get('right', 0) * ref_dim
-        pad_top = padding.get('top', 0) * ref_dim
-        pad_bottom = padding.get('bottom', 0) * ref_dim
-    else:
-        # Uniform padding
-        pad_left = pad_right = pad_top = pad_bottom = padding * ref_dim
-
-    # Subtract padding (inverse of add_padding)
-    detection.bbox = [
-        x1 + pad_left,
-        y1 + pad_top,
-        x2 - pad_right,
-        y2 - pad_bottom
-    ]
+    detection.bbox = [x1 + pad_left, y1 + pad_top, x2 - pad_right, y2 - pad_bottom]

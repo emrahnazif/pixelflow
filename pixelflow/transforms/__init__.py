@@ -58,18 +58,16 @@ updated_detections = pf.transform.update_bbox_from_keypoints(
 
 ### Automated inverse transformations:
 ```python
-# Apply transform chain
+# Apply transform chain; each one is recorded on the detections it moved
 img, dets = pf.transform.rotate_detections(image, detections, 45)
 img, dets = pf.transform.crop_detections(img, dets, [100, 50, 500, 400])
 
-# Run inference on transformed image
-results = model.predict(img)
+# Undo all of them, last first, to get coordinates in the original image
+restored = pf.transform.inverse_transforms(dets)
+annotated = pf.annotate.box(image, restored)
 
-# Automatically undo ALL transforms to get original coordinates
-original_coords = pf.transform.inverse_transforms(results)
-
-# Now coordinates match original image
-annotated = pf.annotate.box(original_image, original_coords)
+# The history lives on those detections: results of a model run on `img` have none,
+# so inverse_transforms cannot map them back.
 ```
 """
 

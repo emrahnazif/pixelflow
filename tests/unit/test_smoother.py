@@ -121,7 +121,7 @@ class TestSmoothing:
                   for x, j in zip(true_x, jitter)]
 
         results = fill(buffer, frames)
-        ideal = true_x[2:2 + len(results)]
+        ideal = true_x[:len(results)]  # every frame comes out, from frame 0
         raw_error = np.mean([abs(raw[0].bbox[0] - x) for (raw, _), x in zip(results, ideal)])
         smoothed_error = np.mean([abs(sm[0].bbox[0] - x) for (_, sm), x in zip(results, ideal)])
         assert smoothed_error < raw_error

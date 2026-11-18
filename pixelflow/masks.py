@@ -210,3 +210,30 @@ def simplify_polygon(polygon_points, tolerance: float = 2.0, preserve_topology: 
         # own points; validate_segments rounds the float32 artefacts back out of them.
         points = cv2.approxPolyDP(points.reshape(-1, 1, 2), float(tolerance), True)[:, 0, :]
     return validate_segments(points)
+
+
+def shift_masks(masks, dx, dy, canvas_shape=None):
+    """Move a detection's masks by ``(dx, dy)`` pixels.
+
+    A polygon mask (a list of points) is offset. A raster mask is pasted onto an all-False
+    canvas of ``canvas_shape`` (``(height, width)``) with its top-left corner at
+    ``(dx, dy)``; without ``canvas_shape`` it is kept as it is. Anything else is kept as is.
+
+    Used wherever masks made for a part of an image (a slice, a crop) go back onto the
+    whole image.
+    """
+    if masks is None:
+        return None
+    shifted = []
+    for mask in masks:
+        if isinstance(mask, np.ndarray) and canvas_shape is not None:
+            canvas = np.zeros(tuple(canvas_shape[:2]), dtype=mask.dtype)
+            x0, y0 = int(dx), int(dy)
+            height, width = mask.shape[:2]
+            canvas[y0:y0 + height, x0:x0 + width] = mask
+            shifted.append(canvas)
+        elif isinstance(mask, list):
+            shifted.append([[x + dx, y + dy] for x, y in mask])
+        else:
+            shifted.append(mask)
+    return shifted

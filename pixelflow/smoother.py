@@ -44,38 +44,26 @@ def smooth(buffer: 'Buffer', temporal_weight_decay: float = 0.8) -> Detections:
         TypeError: If buffer is not a valid Buffer instance.
         
     Example:
-        >>> import cv2
         >>> import pixelflow as pf
-        >>> from pixelflow.buffer import Buffer
-        >>> from ultralytics import YOLO
-        >>> 
-        >>> # Setup video processing with buffer
-        >>> model = YOLO("yolo11n.pt")
-        >>> buffer = Buffer(frames=5)  # 2 past + current + 2 future
-        >>> cap = cv2.VideoCapture("video.mp4")
         >>>
-        >>> # Process video frames with smoothing
-        >>> while True:
-        >>>     ret, frame = cap.read()
-        >>>     if not ret: break
+        >>> tracker = pf.tracker.ByteTracker()
+        >>> buffer = pf.Buffer(frames=5)  # 2 past + current + 2 future
+        >>> for frame in pf.VideoReader("video.mp4"):
+        ...     results = tracker.update(model_results(frame))
+        ...     results, frame = buffer.update(results, frame)
+        ...     if frame is None:
+        ...         continue
+        ...     smoothed = pf.smooth(buffer)
+        >>> for results, frame in buffer.flush():
+        ...     smoothed = pf.smooth(buffer)  # the last frames come back unsmoothed
         >>>
-        >>>     # Get raw detections and add to buffer
-        >>>     outputs = model.predict(frame)
-        >>>     results = pf.from_ultralytics(outputs)
-        >>>     buffer.update(results, frame)
-        >>>     
-        >>>     # Apply temporal smoothing
-        >>>     smoothed = pf.smoother.smooth(buffer)
-        >>> 
-        >>> # Advanced usage with custom decay
-        >>> smoothed = pf.smoother.smooth(buffer, temporal_weight_decay=0.7)
-        >>> 
         >>> # Conservative smoothing for fast-moving objects
-        >>> smoothed = pf.smoother.smooth(buffer, temporal_weight_decay=0.9)
-    
+        >>> smoothed = pf.smooth(buffer, temporal_weight_decay=0.9)
+
     Notes:
-        - Requires buffer to be filled with temporal context (past + current + future frames)
-        - Returns raw current frame results when temporal context is unavailable
+        - Smooths the frame the buffer last returned, from update() or flush()
+        - Needs `delay` frames on both sides: near the start and end of a video, the raw
+          results of that frame are returned; before any frame is returned, empty Detections
         - Automatically interpolates missing detections when objects appear in past/future but not current frame
         - Preserves all detection attributes (masks, keypoints, etc.) from current frame
         - Weight decay applies exponentially: frame distance 1 = decay^1, distance 2 = decay^2, etc.
@@ -94,18 +82,18 @@ def smooth(buffer: 'Buffer', temporal_weight_decay: float = 0.8) -> Detections:
             f"temporal_weight_decay must be between 0.1 and 1.0, got {temporal_weight_decay}"
         )
 
-    # Always return the current middle frame results
-    middle_idx = buffer.buffer_size // 2
-    if middle_idx < len(buffer.results_buffer):
-        raw_results = buffer.results_buffer[middle_idx]
-    else:
-        raw_results = Detections()
-    
-    # Only apply smoothing if buffer is full, otherwise return raw results
+    # The frame being smoothed is the one update() or flush() last returned.
     context = buffer.get_temporal_context()
     if context is None:
+        return Detections()
+    raw_results = context['current_results']
+
+    # Smoothing averages a detection with the same number of frames on each side. Near the
+    # start and end of a video one side is short, and a one-sided average pulls a moving box
+    # towards where it is going, so those frames come back unsmoothed.
+    if len(context['past_results']) < buffer.delay or len(context['future_results']) < buffer.delay:
         return raw_results
-    
+
     # Group all detections by tracker_id across all temporal frames
     tracker_detections = _collect_temporal_detections(context)
 

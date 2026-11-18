@@ -7,9 +7,13 @@ predictions with intelligent NMS/NMM. Designed for simplicity and performance
 following PixelFlow principles with comprehensive edge case handling.
 """
 
+import warnings
+
 import numpy as np
 from typing import List, Tuple, Callable, Optional, Union
 from .detections import Detections, Detection
+from .masks import shift_masks
+from .transforms.detections import _translate_detection
 
 __all__ = ["SlicedInference", "auto_slice_size"]
 
@@ -58,9 +62,9 @@ class SlicedInference:
         overlap_ratio_h: float = 0.2,
         overlap_ratio_w: float = 0.2,
         iou_threshold: float = 0.5,
-        ios_threshold: float = 0.5,
+        ios_threshold: float = 0.9,
         merge_mode: str = 'nms',
-        min_slice_area_ratio: float = 0.1
+        min_slice_area_ratio: Optional[float] = None
     ):
         """Initialize SlicedInference with configuration parameters.
         
@@ -79,12 +83,14 @@ class SlicedInference:
                                    Range: [0.0, 0.9]. Default is 0.2 (20% overlap).
             iou_threshold (float): IOU threshold for merging predictions from
                                  overlapping slices. Range: [0.0, 1.0]. Default is 0.5.
-            ios_threshold (float): IOS (Intersection over Smaller) threshold for
-                                 handling nested objects. Range: [0.0, 1.0]. Default is 0.5.
+            ios_threshold (float): IOS (Intersection over Smaller) above which the smaller of
+                                 two same-class boxes is removed as a duplicate: the share
+                                 of it inside the larger one. Range: [0.0, 1.0]. Default is
+                                 0.9; lower it to remove more boxes found inside others.
             merge_mode (str): Merging strategy. 'nms' for Non-Maximum Suppression,
                             'nmm' for Non-Maximum Merging. Default is 'nms'.
-            min_slice_area_ratio (float): Minimum ratio of object area in slice to
-                                        keep detection. Range: [0.0, 1.0]. Default is 0.1.
+            min_slice_area_ratio: Deprecated. It never had an effect; passing it warns, and
+                                it will be removed.
                                         
         Example:
             >>> import pixelflow as pf
@@ -107,7 +113,7 @@ class SlicedInference:
             ...     slice_width=416,
             ...     overlap_ratio_h=0.4,  # Higher overlap for small objects
             ...     iou_threshold=0.3,    # Lower threshold for more aggressive merging
-            ...     ios_threshold=0.7     # Higher threshold to preserve nested objects
+            ...     ios_threshold=0.95    # Higher threshold to preserve nested objects
             ... )
             
         Notes:
@@ -127,11 +133,18 @@ class SlicedInference:
         self.iou_threshold = iou_threshold
         self.ios_threshold = ios_threshold
         self.merge_mode = merge_mode
-        self.min_slice_area_ratio = min_slice_area_ratio
+        if min_slice_area_ratio is not None:
+            warnings.warn(
+                "SlicedInference(min_slice_area_ratio=...) has no effect and will be removed.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         
         # Calculate step sizes based on overlap
-        self.step_height = int(slice_height * (1 - overlap_ratio_h))
-        self.step_width = int(slice_width * (1 - overlap_ratio_w))
+        # From the clamped ratios, and at least 1 px: an overlap of 1.0 made the step 0 and
+        # generate_slices never advanced.
+        self.step_height = max(1, int(slice_height * (1 - self.overlap_ratio_h)))
+        self.step_width = max(1, int(slice_width * (1 - self.overlap_ratio_w)))
     
     def generate_slices(self, image_height: int, image_width: int) -> List[Tuple[int, int, int, int, int]]:
         """Generate slice coordinates for the given image dimensions.
@@ -209,7 +222,8 @@ class SlicedInference:
         
         return slices
     
-    def shift_predictions(self, predictions: Detections, offset_x: int, offset_y: int, slice_id: int) -> Detections:
+    def shift_predictions(self, predictions: Detections, offset_x: int, offset_y: int, slice_id: int,
+                          image_shape: Optional[Tuple[int, int]] = None) -> Detections:
         """Shift prediction coordinates from slice space to full image space.
         
         Transforms detection coordinates from local slice coordinate system to
@@ -222,6 +236,8 @@ class SlicedInference:
             offset_x (int): X offset of the slice's top-left corner in full image coordinates.
             offset_y (int): Y offset of the slice's top-left corner in full image coordinates.
             slice_id (int): Unique identifier of the source slice for tracking purposes.
+            image_shape (Tuple[int, int], optional): (height, width) of the full image. Raster
+                masks are placed on a canvas of this size; without it they stay slice-sized.
             
         Returns:
             Detections: New Detections object with coordinates transformed to full image space
@@ -243,7 +259,8 @@ class SlicedInference:
             ...     print(f"Box: {detection.bbox}, From slice: {detection.metadata.get('slice_id')}")
 
         Notes:
-            - Only bbox coordinates are currently shifted; masks, segments, and keypoints need manual handling
+            - Boxes, segments, keypoints and polygon masks are shifted by the slice offset
+            - Raster masks are placed on a full-image canvas when image_shape is given
             - Slice_id is stored in detection.metadata for use in merge algorithms
             - Original prediction objects are not modified; new objects are created
             - Preserves all detection attributes (class_id, confidence, etc.)
@@ -252,31 +269,13 @@ class SlicedInference:
             AttributeError: If predictions object doesn't support iteration
         """
         shifted_results = Detections()
-        
         for pred in predictions:
-            # Create a new prediction with shifted coordinates
-            shifted_pred = Detection(
-                inference_id=pred.inference_id,
-                bbox=[
-                    pred.bbox[0] + offset_x,
-                    pred.bbox[1] + offset_y,
-                    pred.bbox[2] + offset_x,
-                    pred.bbox[3] + offset_y
-                ] if pred.bbox else None,
-                masks=pred.masks,  # TODO: Shift mask coordinates if needed
-                segments=pred.segments,  # TODO: Shift segment coordinates if needed
-                keypoints=pred.keypoints,  # TODO: Shift keypoint coordinates if needed
-                class_id=pred.class_id,
-                class_name=pred.class_name,
-                text=pred.text,
-                confidence=pred.confidence,
-                tracker_id=pred.tracker_id,
-                metadata={'slice_id': slice_id} if pred.metadata is None else {**pred.metadata, 'slice_id': slice_id}
-            )
-            shifted_results.add_detection(shifted_pred)
-        
+            shifted = pred.copy()
+            _translate_detection(shifted, offset_x, offset_y, canvas_shape=image_shape)
+            shifted.metadata = {**(pred.metadata or {}), 'slice_id': slice_id}
+            shifted_results.add_detection(shifted)
         return shifted_results
-    
+
     def calculate_iou(self, box1: List[float], box2: List[float]) -> float:
         """Calculate Intersection over Union (IoU) between two bounding boxes.
         
@@ -522,14 +521,14 @@ class SlicedInference:
             >>> # NMM mode creates weighted average boxes from merged predictions
             >>> 
             >>> # Custom thresholds for small object detection
-            >>> slicer_small = pf.SlicedInference(iou_threshold=0.3, ios_threshold=0.8)
+            >>> slicer_small = pf.SlicedInference(iou_threshold=0.3, ios_threshold=0.95)
             >>> merged_small = slicer_small.merge_predictions(all_preds, slices)
             >>> # Lower IoU threshold merges more aggressively, higher IoS preserves nested objects
             
         Notes:
             - Predictions are sorted by confidence in descending order before processing
             - Adjacent slices use lower IoU threshold (threshold * 0.7) for more aggressive merging
-            - High IoS (>0.9) triggers suppression to handle complete containment cases
+            - IoS above ios_threshold (0.9 by default) suppresses a box contained in another
             - NMM mode merges boxes using confidence-weighted average coordinates
             - NMS mode keeps only the highest confidence detection per merged group
             - Different class IDs are never merged regardless of spatial overlap
@@ -591,11 +590,9 @@ class SlicedInference:
                 elif not adjacent and iou > self.iou_threshold:
                     should_suppress = True
                 
-                # Case 3: High IOS -> nested objects (keep both unless very high IOS)
+                # Case 3: one box (almost) inside the other -> the smaller is a duplicate
                 elif ios > self.ios_threshold:
-                    # Only suppress if IOS is very high (almost complete containment)
-                    if ios > 0.9:
-                        should_suppress = True
+                    should_suppress = True
                 
                 if should_suppress:
                     suppressed.add(j)
@@ -684,7 +681,8 @@ class SlicedInference:
             confidence=max_conf_pred.confidence,
             masks=max_conf_pred.masks,
             segments=max_conf_pred.segments,
-            keypoints=max_conf_pred.keypoints
+            keypoints=max_conf_pred.keypoints,
+            metadata=max_conf_pred.metadata,
         )
     
     def predict(
@@ -718,8 +716,7 @@ class SlicedInference:
                        duplicates removed, and predictions consolidated across slices.
                        
         Raises:
-            ValueError: If image is not a valid numpy array
-            RuntimeError: If detector_func fails on any slice
+            TypeError: If detector_func returns anything other than Detections
             
         Example:
             >>> import cv2
@@ -795,16 +792,18 @@ class SlicedInference:
             # Run detector
             slice_results = detector_func(slice_img, **detector_kwargs)
             
-            # Handle different return types
+            # A raw model output here used to become empty Detections, so a detector that
+            # forgot its converter returned nothing for the whole image and said nothing.
             if not isinstance(slice_results, Detections):
-                # Assume it's a raw detection output that needs conversion
-                # This allows flexibility with different detector formats
-                if hasattr(slice_results, '__iter__'):
-                    slice_results = Detections()  # Create empty Detections if needed
-                else:
-                    slice_results = Detections()
-            
-            # Shift coordinates to full image space
+                raise TypeError(
+                    f"detector_func must return pixelflow Detections, got "
+                    f"{type(slice_results).__name__}. Convert the model's output inside it, "
+                    f"for example with pf.from_mayaku(...)."
+                )
+
+            # Shift coordinates to full image space. Raster masks stay slice-sized until
+            # after the merge: most duplicates are dropped there, and an image-sized
+            # canvas each (2.5 MB at 1920x1280) would be allocated only to be discarded.
             shifted_results = self.shift_predictions(slice_results, x1, y1, slice_id)
             
             # Collect all predictions
@@ -818,6 +817,17 @@ class SlicedInference:
         
         # Merge predictions
         merged_results = self.merge_predictions(all_predictions, slices)
+
+        # Raster masks of the detections that survived go onto image-sized canvases,
+        # at the corner of the slice they came from.
+        for detection in merged_results:
+            if detection.masks and detection.metadata and 'slice_id' in detection.metadata:
+                sx, sy = slices[detection.metadata['slice_id']][:2]
+                detection.masks = [
+                    shift_masks([mask], sx, sy, (image_height, image_width))[0]
+                    if isinstance(mask, np.ndarray) else mask
+                    for mask in detection.masks
+                ]
         
         if verbose:
             print(f"Predictions after merging: {len(merged_results)}")
