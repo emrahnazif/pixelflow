@@ -45,8 +45,9 @@ original = pf.read_image("street.jpg")
 annotated = pf.annotate.box(original.copy(), detections)
 ```
 
-Images are RGB, as `pf.read_image` and `pf.VideoReader` return them. An image read with
-`cv2.imread` is BGR: the drawing works, but every color comes out with red and blue swapped.
+Images are RGB, as [`pf.read_image` and `pf.VideoReader`](/docs/utilities/media.md) return
+them. An image read with `cv2.imread` is BGR: the drawing works, but every color comes out with
+red and blue swapped.
 
 ## Sizes follow the image
 

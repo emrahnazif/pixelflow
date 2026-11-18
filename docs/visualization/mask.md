@@ -30,8 +30,8 @@ the pixel.
 
 A mask must have the same width and height as the image; otherwise `mask` raises a `ValueError`.
 That is the case for masks from every [converter](/docs/core-concepts/converters.md), as long as
-you draw on the image at the size you gave the model: resize the picture after drawing, not
-before.
+you draw on the image at the size you gave the model:
+[resize](/docs/utilities/transforms.md#resize) the picture after drawing, not before.
 
 To draw only the edge of each object, use [`polygon`](/docs/visualization/polygon.md).
 

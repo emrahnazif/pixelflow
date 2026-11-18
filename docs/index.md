@@ -71,3 +71,4 @@ Images in PixelFlow are NumPy arrays in RGB order: `pf.read_image` returns one a
   confidence, class, size or position.
 - [Visualization](/docs/visualization/overview.md): every way to draw results on an image.
 - [Tracking](/docs/tracking/tracker.md): follow objects from frame to frame in a video.
+- [Media](/docs/utilities/media.md): read and write images, videos and camera streams.
