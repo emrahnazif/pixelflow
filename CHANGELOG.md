@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`from_mayaku` reads what a Mayaku predictor returns today**: a `Detections` with
   `boxes`, `scores`, `labels`, `masks` and `keypoints`.
+- **`from_ultralytics` on `model.track()` results reports the real confidence and class.**
+  Tracking puts the track id before the confidence and class in `boxes.data`, and the
+  converter read fixed columns, so every tracked detection had its track id as its
+  confidence (1.0, 2.0, ...) and a class taken from the confidence. It now reads
+  `boxes.xyxy`, `boxes.conf` and `boxes.cls`.
 
 ### Removed
 

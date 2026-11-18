@@ -644,19 +644,13 @@ def from_ultralytics(ultralytics_results: Union[Any, List[Any]], labels=None):
     if result.boxes is None or len(result.boxes) == 0:
         return detections_obj
     
-    # Get all box data in one tensor transfer (more efficient)
-    boxes_data = result.boxes.data.cpu().numpy()
-    
-    # Extract components from the tensor
-    # Format: [x1, y1, x2, y2, conf, class_id, ...] or [x1, y1, x2, y2, conf, class_id, track_id]
-    xyxy = boxes_data[:, :4]  # Bounding boxes
-    confidences = boxes_data[:, 4]  # Confidence scores  
-    class_ids = boxes_data[:, 5].astype(int)  # Class IDs
-    
-    # Check if tracker IDs are available (when using model.track())
-    tracker_ids = None
-    if hasattr(result.boxes, 'id') and result.boxes.id is not None:
-        tracker_ids = result.boxes.id.cpu().numpy().astype(int)
+    # One device-to-host copy, then named fields rather than `data` columns: tracking
+    # inserts the track id before conf and cls, and only Ultralytics knows the layout.
+    boxes = result.boxes.cpu().numpy()
+    xyxy = boxes.xyxy
+    confidences = boxes.conf
+    class_ids = boxes.cls.astype(int)
+    tracker_ids = boxes.id.astype(int) if boxes.id is not None else None
     
     # Check if we have segmentation masks
     has_masks = hasattr(result, 'masks') and result.masks is not None

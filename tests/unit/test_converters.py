@@ -19,24 +19,19 @@ import pixelflow as pf
 @pytest.fixture
 def mock_ultralytics_result():
     """Create mock Ultralytics YOLO result."""
-    class MockTensor:
-        def __init__(self, data):
-            self._data = np.array(data)
+    class MockBox:
+        """The named fields of ultralytics Boxes, already on the CPU as numpy."""
+        def __init__(self):
+            self.xyxy = np.array([[100, 100, 200, 200], [300, 150, 400, 280]])
+            self.conf = np.array([0.95, 0.87])
+            self.cls = np.array([0, 2])
+            self.id = None
         def cpu(self):
             return self
         def numpy(self):
-            return self._data
-
-    class MockBox:
-        def __init__(self):
-            # data format: [x1, y1, x2, y2, conf, class_id]
-            self.data = MockTensor([
-                [100, 100, 200, 200, 0.95, 0],
-                [300, 150, 400, 280, 0.87, 2],
-            ])
-            self.id = None
+            return self
         def __len__(self):
-            return 2
+            return len(self.conf)
 
     class MockResult:
         def __init__(self):
@@ -303,6 +298,17 @@ class TestUltralyticsConverter:
         assert detections[0].confidence == 0.95
         assert detections[0].class_id == 0
         assert detections[0].class_name == "person"
+
+    def test_from_ultralytics_tracked(self, mock_ultralytics_result):
+        """model.track() adds track ids; confidence and class must stay as they were."""
+        result = mock_ultralytics_result[0]
+        result.boxes.id = np.array([7, 8])
+        detections = pf.from_ultralytics([result])
+
+        assert [d.tracker_id for d in detections] == [7, 8]
+        assert [d.confidence for d in detections] == [0.95, 0.87]
+        assert [d.class_id for d in detections] == [0, 2]
+        assert [d.class_name for d in detections] == ["person", "car"]
 
     def test_from_ultralytics_multiple_results(self, mock_ultralytics_result):
         """Test conversion with multiple result objects."""
