@@ -2,8 +2,8 @@
 Detection Converters for Machine Learning Framework Integration.
 
 Provides standardized conversion utilities to transform detection outputs from
-various machine learning frameworks (Detectron2, Ultralytics YOLO, Datamarkin API,
-Transformers) into PixelFlow's unified Detections format. This module enables seamless
+various machine learning frameworks (Detectron2, Ultralytics YOLO, Transformers)
+into PixelFlow's unified Detections format. This module enables seamless
 integration with different ML backends while maintaining consistent data structures
 for downstream processing, visualization, and analysis workflows.
 
@@ -21,7 +21,6 @@ from pixelflow.validators import round_coord, validate_segments
 
 __all__ = [
     "from_arrays",
-    "from_datamarkin",
     "from_florence2",
     "from_detectron2",
     "from_mayaku",
@@ -109,67 +108,6 @@ def _flat_coord_lists(nested):
 
     for item in nested:
         yield from _flat_coord_lists(item)
-
-
-def from_datamarkin(api_response: Dict[str, Any]):
-    """Convert Datamarkin API response to a Detections object.
-
-    Args:
-        api_response: Dict with 'predictions' -> 'objects' structure from the Datamarkin API.
-
-    Returns:
-        Detections: Bounding boxes, polygon masks, keypoints, class names, and confidence scores.
-
-    Example:
-        >>> import pixelflow as pf
-        >>> detections = pf.from_datamarkin(api_response)
-        >>> for det in detections:
-        ...     print(f"{det.class_name}: {det.confidence:.2f}")
-
-    Notes:
-        - Keypoint probability is carried through as `confidence`, not thresholded.
-    """
-    from .detections import Detections, Detection, KeyPoint
-
-    detections_obj = Detections()
-
-    for obj in api_response.get("predictions", {}).get("objects", []):
-        bbox = obj.get("bbox", [])
-        mask = obj.get("mask", [])
-        keypoints_api = obj.get("keypoints", [])
-        class_name = obj.get("class", "")
-        confidence = obj.get("bbox_score", None)
-
-        # API format: {"name": "p0", "point": [x, y], "probability": 0.375}
-        # The API names its own keypoints, so nothing here has to be inferred. Position in the
-        # list is the id, and an absent name stays absent rather than becoming "".
-        keypoints = None
-        if keypoints_api:
-            keypoints = []
-            for idx, kp in enumerate(keypoints_api):
-                point = kp.get("point", (0, 0))
-                keypoints.append(KeyPoint(
-                    x=point[0],
-                    y=point[1],
-                    id=idx,
-                    name=kp.get("name") or None,
-                    confidence=kp.get("probability"),
-                ))
-
-        # Create the Detection object
-        detection = Detection(
-            bbox=bbox,
-            masks=mask,
-            keypoints=keypoints,
-            class_id=0,  # API doesn't provide numeric class IDs, default to 0
-            class_name=class_name,
-            confidence=confidence,
-        )
-
-        # Add the prediction to the list
-        detections_obj.add_detection(detection)
-
-    return detections_obj
 
 
 # Florence-2 tasks whose `labels` are category names drawn from a vocabulary, so

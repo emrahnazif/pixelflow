@@ -2,7 +2,7 @@
 Unit tests for pixelflow.detections.converters module.
 
 Tests framework-specific converters including Ultralytics, Detectron2,
-Transformers, SAM, Datamarkin, and Falcon Perception converters.
+Transformers, SAM, and Falcon Perception converters.
 """
 
 import pytest
@@ -797,95 +797,6 @@ class TestSAMConverter:
 
         detections = pf.from_efficienttam(masks, scores)
         assert detections[0].masks[0].dtype == bool
-
-
-# ============================================================================
-# Datamarkin API Converter Tests
-# ============================================================================
-
-class TestDatamarkinAPIConverter:
-    """Tests for from_datamarkin converter."""
-
-    def test_from_datamarkin_basic(self):
-        """Test conversion from Datamarkin API format."""
-        api_response = {
-            "predictions": {
-                "objects": [
-                    {
-                        "bbox": [100, 100, 200, 200],
-                        "bbox_score": 0.95,
-                        "class": "person",
-                    },
-                    {
-                        "bbox": [300, 150, 400, 280],
-                        "bbox_score": 0.87,
-                        "class": "car",
-                    },
-                ]
-            }
-        }
-
-        detections = pf.from_datamarkin(api_response)
-
-        assert len(detections) == 2
-        assert detections[0].bbox == [100, 100, 200, 200]
-        assert detections[0].confidence == 0.95
-        assert detections[0].class_name == "person"
-        assert detections[1].class_name == "car"
-
-    def test_from_datamarkin_keypoints(self):
-        """Keypoint probability is carried through as confidence, not thresholded."""
-        api_response = {
-            "predictions": {
-                "objects": [
-                    {
-                        "bbox": [100, 100, 200, 200],
-                        "bbox_score": 0.9,
-                        "class": "person",
-                        "keypoints": [
-                            {"name": "nose", "point": [150, 120], "probability": 0.8},
-                            {"name": "left_eye", "point": [140, 115], "probability": 0.0},
-                        ],
-                    }
-                ]
-            }
-        }
-
-        detections = pf.from_datamarkin(api_response)
-
-        assert len(detections[0].keypoints) == 2
-        assert detections[0].keypoints[0].name == "nose"
-        assert detections[0].keypoints[0].x == 150
-        assert detections[0].keypoints[0].confidence == pytest.approx(0.8)
-        assert detections[0].keypoints[1].confidence == pytest.approx(0.0)
-        assert [kp.id for kp in detections[0].keypoints] == [0, 1]
-
-
-# ============================================================================
-# Edge Cases and Error Handling
-# ============================================================================
-
-class TestConverterEdgeCases:
-    """Test edge cases and error handling for converters."""
-
-    def test_converter_with_none_values(self):
-        """Test converters handle None/null values gracefully."""
-        api_response = {
-            "predictions": {
-                "objects": [
-                    {"bbox": [100, 100, 200, 200], "bbox_score": None, "class": None}
-                ]
-            }
-        }
-
-        detections = pf.from_datamarkin(api_response)
-        assert len(detections) == 1
-        assert detections[0].confidence is None
-
-    def test_converter_empty_input(self):
-        """Test converters with empty input."""
-        assert len(pf.from_datamarkin({})) == 0
-        assert len(pf.from_datamarkin({"predictions": {"objects": []}})) == 0
 
 
 # ============================================================================

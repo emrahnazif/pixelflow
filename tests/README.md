@@ -84,7 +84,6 @@ Tests for framework-specific converters:
 - ✅ Mock Detectron2 converter
 - ⚠️ OCR converters pending Detection OCR field support
 - ⚠️ SAM converter not yet implemented
-- ⚠️ Datamarkin API converter needs signature check
 
 #### `test_annotators.py` (42 tests)
 Tests for visualization functions:

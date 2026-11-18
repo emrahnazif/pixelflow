@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+
+- **`from_datamarkin`.** The Datamarkin API converter is gone, along with its tests and
+  its rows in the README and documentation guide. Code that called it should build
+  `Detection` objects directly, or use `Detections.from_dict` if the data is already in
+  pixelflow's own format.
+
 ## [0.7.0] - 2026-11-12
 
 Results can be read back. `to_dict()` and `to_json()` have always written a result

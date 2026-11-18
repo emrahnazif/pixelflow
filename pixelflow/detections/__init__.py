@@ -4,7 +4,6 @@
 from .detections import KeyPoint, Detection, Detections
 
 from .converters import (
-    from_datamarkin,
     from_florence2,
     from_detectron2,
     from_mayaku,
@@ -29,7 +28,6 @@ __all__ = [
     'Detections',
 
     # Converter functions
-    'from_datamarkin',
     'from_florence2',
     'from_detectron2',
     'from_mayaku',

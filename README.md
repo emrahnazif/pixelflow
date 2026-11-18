@@ -430,7 +430,6 @@ detections = pf.Detections.from_dict(data)
 | Supervision | `from_supervision()` | Boxes, masks, keypoints |
 | Falcon Perception | `from_falcon_perception()` | Boxes, masks |
 | EasyOCR | `from_easyocr()` | Quads, text, scores |
-| Datamarkin API | `from_datamarkin()` | Boxes, masks, keypoints |
 
 ## Documentation
 
