@@ -538,22 +538,13 @@ def from_detectron2(detectron2_results: Dict[str, Any], labels=None):
     return detections_obj
 
 
-def from_mayaku(mayaku_instances, labels=None):
-    """Convert Mayaku inference results to a Detections object.
-
-    Mayaku shares Detectron2's runtime layout: the same `Instances`
-    container, the same field names (`pred_boxes`, `scores`,
-    `pred_classes`, `pred_masks`, `pred_keypoints`), xyxy absolute boxes,
-    `(N, H, W)` boolean masks after postprocess, and `(N, K, 3)`
-    keypoints with `(x, y, score)` columns. The divergence that matters
-    here: Mayaku's predictor returns the `Instances` directly, whereas
-    Detectron2's `DefaultPredictor` wraps it in a `{"instances": ...}`
-    dict.
+def from_mayaku(mayaku_result, labels=None):
+    """Convert a Mayaku result to a Detections object.
 
     Args:
-        mayaku_instances: The `Instances` returned by calling a Mayaku
-            predictor (NOT a dict). If you have a wrapper that mimics
-            D2's dict shape, pass `wrapper["instances"]`.
+        mayaku_result: The `Detections` returned by calling a Mayaku predictor
+            on one image (`predictor.batch` returns a list of them; pass each
+            on its own).
         labels: Optional label definitions for class name and keypoint
             name resolution. Pass `predictor.class_names` — see the note
             below. Accepts the same three formats as `from_detectron2`:
@@ -570,12 +561,10 @@ def from_mayaku(mayaku_instances, labels=None):
         >>> from mayaku import from_pretrained
         >>>
         >>> predictor = from_pretrained("mayaku-n-det")
-        >>> instances = predictor("photo.jpg")
+        >>> result = predictor("photo.jpg")
         >>>
         >>> # Take the vocabulary from the checkpoint, not a hardcoded list.
-        >>> detections = pf.from_mayaku(
-        ...     instances, labels=predictor.class_names
-        ... )
+        >>> detections = pf.from_mayaku(result, labels=predictor.class_names)
         >>> for det in detections:
         ...     print(f"{det.class_name}: {det.confidence:.2f}")
 
@@ -584,72 +573,17 @@ def from_mayaku(mayaku_instances, labels=None):
           vocabulary in the sidecar, and the pretrained models are trained on
           Objects365 (365 classes). Another dataset's names mislabel every
           detection — class 5 is "Car" in Objects365 but "bus" in COCO.
-        - A predictor accepts a path directly and decodes it as RGB.
-          When passing an array instead, it must be RGB: `cv2.imread`
-          gives BGR, so convert with `mayaku.utils.bgr_to_rgb` first.
-        - Predictors return a fixed-size candidate set (typically 100
-          rows) with no score threshold applied. Chain
-          `filter_by_confidence()` to cut the low-scoring tail.
-        - All tensors are moved to CPU automatically before conversion.
-        - Mayaku auto-runs `detector_postprocess`, so coordinates and
-          masks are already in original image space.
+        - A predictor takes a path, a PIL image, or a BGR array, so a
+          `cv2.imread` frame goes in as it is.
+        - Predictors keep a long low-confidence tail. Chain
+          `filter_by_confidence()` to cut it, or pass `conf=` to the predictor.
+        - Boxes, masks and keypoints are already in original image pixels.
+        - Oriented-box models also return `rboxes`; only their axis-aligned
+          hulls (`boxes`) are converted.
     """
-    from .detections import Detections, Detection
-
-    detections_obj = Detections()
-
-    # Mayaku's Predictor returns Instances directly — no dict unwrap.
-    instances = mayaku_instances.to("cpu")
-
-    if len(instances) == 0:
-        return detections_obj
-
-    # Bounding boxes — XYXY absolute pixel coords (same as D2).
-    boxes = instances.pred_boxes.tensor.numpy() if instances.has("pred_boxes") else None
-
-    # Confidence scores — float ∈ [0, 1].
-    scores = instances.scores.numpy() if instances.has("scores") else None
-
-    # Class IDs — int64, 0-indexed.
-    classes = instances.pred_classes.numpy() if instances.has("pred_classes") else None
-
-    # Segmentation masks — (N, H, W) bool after postprocess.
-    masks = None
-    if instances.has("pred_masks"):
-        masks = instances.pred_masks.numpy()
-
-    # Keypoints — (N, K, 3) with (x, y, score) columns.
-    keypoints = None
-    if instances.has("pred_keypoints"):
-        keypoints = instances.pred_keypoints.numpy()
-
-    for i in range(len(instances)):
-        bbox = boxes[i].tolist() if boxes is not None else None
-        confidence = float(scores[i]) if scores is not None else None
-        class_id = int(classes[i]) if classes is not None else None
-
-        class_name, kp_names = get_label_info(labels, class_id)
-
-        mask = None
-        if masks is not None:
-            mask = masks[i].astype(bool)
-
-        # keypoints[i] has shape (K, 3): x, y, confidence
-        kpts = _build_keypoints(keypoints[i], kp_names) if keypoints is not None else None
-
-        detection = Detection(
-            bbox=bbox,
-            masks=[mask] if mask is not None else None,
-            segments=None,
-            keypoints=kpts,
-            class_id=class_id,
-            class_name=class_name,
-            confidence=confidence
-        )
-
-        detections_obj.add_detection(detection)
-
-    return detections_obj
+    r = mayaku_result
+    return from_arrays(r.boxes, r.scores, r.labels, masks=r.masks,
+                       keypoints=r.keypoints, labels=labels)
 
 
 def from_ultralytics(ultralytics_results: Union[Any, List[Any]], labels=None):

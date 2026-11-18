@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`from_mayaku` reads what a Mayaku predictor returns today**: a `Detections` with
+  `boxes`, `scores`, `labels`, `masks` and `keypoints`.
+
 ### Removed
 
 - **`from_datamarkin`.** The Datamarkin API converter is gone, along with its tests and

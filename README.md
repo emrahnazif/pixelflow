@@ -63,7 +63,7 @@ from detectron2.engine import DefaultPredictor
 predictor = DefaultPredictor(cfg)
 detections = pf.from_detectron2(predictor(image), labels=["person", "car"])
 
-# Mayaku (returns Instances directly; take labels from the checkpoint)
+# Mayaku (take labels from the checkpoint)
 from mayaku import from_pretrained
 predictor = from_pretrained("mayaku-n-det")
 detections = pf.from_mayaku(predictor("photo.jpg"), labels=predictor.class_names)

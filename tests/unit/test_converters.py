@@ -1,11 +1,12 @@
 """
 Unit tests for pixelflow.detections.converters module.
 
-Tests framework-specific converters including Ultralytics, Detectron2,
+Tests framework-specific converters including Ultralytics, Detectron2, Mayaku,
 Transformers, SAM, and Falcon Perception converters.
 """
 
 import pytest
+from dataclasses import dataclass
 import numpy as np
 from types import SimpleNamespace
 import pixelflow as pf
@@ -80,36 +81,24 @@ def mock_detectron2_output():
     return {"instances": MockInstances()}
 
 
+@dataclass
+class MayakuResult:
+    """Stand-in for `mayaku.inference.decode.Detections`, field for field."""
+    boxes: np.ndarray
+    scores: np.ndarray
+    labels: np.ndarray
+    masks: np.ndarray = None
+    keypoints: np.ndarray = None
+
+
 @pytest.fixture
 def mock_mayaku_output():
-    """Create mock Mayaku output. Mayaku returns Instances directly (no dict wrap)."""
-    class MockTensor:
-        def __init__(self, data):
-            self._data = np.array(data)
-        def numpy(self):
-            return self._data
-
-    class MockBoxes:
-        def __init__(self, data):
-            self.tensor = MockTensor(data)
-
-    class MockInstances:
-        def __init__(self):
-            self.pred_boxes = MockBoxes([[100, 100, 200, 200], [300, 150, 400, 280]])
-            self.scores = MockTensor([0.95, 0.87])
-            self.pred_classes = MockTensor([0, 2])
-            self._fields = {"pred_boxes", "scores", "pred_classes"}
-
-        def to(self, device):
-            return self
-
-        def has(self, field):
-            return field in self._fields
-
-        def __len__(self):
-            return 2
-
-    return MockInstances()
+    """Two detections, class 0 and class 2, as a Mayaku predictor returns them."""
+    return MayakuResult(
+        boxes=np.array([[100., 100., 200., 200.], [300., 150., 400., 280.]], dtype=np.float32),
+        scores=np.array([0.95, 0.87], dtype=np.float32),
+        labels=np.array([0, 2]),
+    )
 
 
 # ============================================================================
@@ -490,198 +479,62 @@ class TestDetectron2Converter:
 class TestMayakuConverter:
     """Tests for from_mayaku converter.
 
-    Mayaku is a clean Detectron2 reimplementation; the runtime output schema
-    is identical except that mayaku's Predictor returns the Instances object
-    directly (not wrapped in a {"instances": ...} dict).
+    from_mayaku hands Mayaku's fields to from_arrays, which TestArraysConverter
+    covers; these check the mapping and the checkpoint vocabulary.
     """
 
-    def test_from_mayaku_basic(self, mock_mayaku_output):
-        """Test basic Mayaku conversion."""
+    def test_from_mayaku_maps_fields(self, mock_mayaku_output):
+        masks = np.zeros((2, 300, 500), dtype=bool)
+        masks[0, 100:200, 100:200] = True
+        mock_mayaku_output.masks = masks
+        mock_mayaku_output.keypoints = np.array([
+            [[150., 120., 0.9], [140., 115., 0.5]],
+            [[350., 160., 0.1], [340., 155., 0.2]],
+        ])
+
         detections = pf.from_mayaku(mock_mayaku_output)
 
         assert len(detections) == 2
         assert detections[0].bbox == [100, 100, 200, 200]
-        assert detections[0].confidence == 0.95
-        assert detections[0].class_id == 0
-        assert detections[1].class_id == 2
+        assert detections[0].confidence == pytest.approx(0.95)
+        assert [d.class_id for d in detections] == [0, 2]
+        assert detections[0].masks[0].sum() == 100 * 100
+        assert not detections[1].masks[0].any()
+        assert (detections[0].keypoints[0].x, detections[0].keypoints[0].y) == (150, 120)
+        assert detections[0].keypoints[0].confidence == pytest.approx(0.9)
 
-    def test_from_mayaku_with_labels_dict(self, mock_mayaku_output):
-        """Test Mayaku conversion with Dict[int, str] labels."""
-        labels = {0: "person", 2: "car"}
-        detections = pf.from_mayaku(mock_mayaku_output, labels=labels)
-        assert detections[0].class_name == "person"
-        assert detections[1].class_name == "car"
-
-    def test_from_mayaku_with_labels_list(self, mock_mayaku_output):
-        """Test Mayaku conversion with List[str] labels."""
-        labels = ["person", "bicycle", "car"]
-        detections = pf.from_mayaku(mock_mayaku_output, labels=labels)
-        assert detections[0].class_name == "person"
-        assert detections[1].class_name == "car"
+    def test_from_mayaku_without_masks_or_keypoints(self, mock_mayaku_output):
+        detections = pf.from_mayaku(mock_mayaku_output)
+        assert detections[0].masks is None
+        assert detections[0].keypoints is None
 
     def test_from_mayaku_uses_checkpoint_vocabulary(self, mock_mayaku_output):
         """predictor.class_names is a plain List[str] indexed by class_id.
 
         Mayaku's pretrained checkpoints are Objects365 (365 classes), so the
-        vocabulary must come from the checkpoint. Verified against the real
-        mayaku-n-det weights: class 0 is "Person" and class 5 is "Car",
-        whereas COCO puts "bus" at 5.
+        vocabulary must come from the checkpoint: class 0 is "Person" and
+        class 5 is "Car", whereas COCO puts "bus" at 5.
         """
         # Truncated stand-in for predictor.class_names.
         class_names = ["Person", "Sneakers", "Chair", "Other Shoes", "Hat", "Car"]
 
         detections = pf.from_mayaku(mock_mayaku_output, labels=class_names)
 
-        assert detections[0].class_id == 0
         assert detections[0].class_name == "Person"
-        assert detections[1].class_id == 2
         assert detections[1].class_name == "Chair"
 
     def test_from_mayaku_out_of_range_class_id_is_none(self):
         """A class_id past the end of the vocabulary yields None, not a crash."""
-        class MockTensor:
-            def __init__(self, data):
-                self._data = np.array(data)
-            def numpy(self):
-                return self._data
-
-        class MockBoxes:
-            def __init__(self, data):
-                self.tensor = MockTensor(data)
-
-        class MockInstances:
-            def __init__(self):
-                self.pred_boxes = MockBoxes([[10, 10, 50, 50]])
-                self.scores = MockTensor([0.9])
-                self.pred_classes = MockTensor([364])  # last Objects365 id
-                self._fields = {"pred_boxes", "scores", "pred_classes"}
-            def to(self, device):
-                return self
-            def has(self, field):
-                return field in self._fields
-            def __len__(self):
-                return 1
-
+        result = MayakuResult(
+            boxes=np.array([[10., 10., 50., 50.]]),
+            scores=np.array([0.9]),
+            labels=np.array([364]),  # last Objects365 id
+        )
         # Passing a COCO-sized vocabulary to a 365-class model is the mistake
-        # this guards against: it must degrade to None rather than raise.
-        detections = pf.from_mayaku(MockInstances(), labels=["person", "car"])
-
-        assert len(detections) == 1
+        # this guards against: the name is unknown, not a wrong one.
+        detections = pf.from_mayaku(result, labels=["person", "car"])
         assert detections[0].class_id == 364
         assert detections[0].class_name is None
-
-    def test_from_mayaku_with_rich_labels(self, mock_mayaku_output):
-        """Test Mayaku conversion with rich Datamarkin format labels."""
-        labels = [
-            {"id": 0, "name": "person", "keypoints": [{"id": 0, "name": "nose"}]},
-            {"id": 2, "name": "car"},
-        ]
-        detections = pf.from_mayaku(mock_mayaku_output, labels=labels)
-        assert detections[0].class_name == "person"
-        assert detections[1].class_name == "car"
-
-    def test_from_mayaku_empty(self):
-        """Test conversion with empty Instances returns empty Detections."""
-        class MockInstances:
-            def to(self, device):
-                return self
-            def has(self, field):
-                return False
-            def __len__(self):
-                return 0
-
-        detections = pf.from_mayaku(MockInstances())
-        assert len(detections) == 0
-
-    def test_from_mayaku_with_keypoints(self):
-        """Test Mayaku keypoint conversion to KeyPoint objects.
-
-        Mayaku stores keypoints as (N, K, 3) with (x, y, score) — same as D2.
-        """
-        class MockTensor:
-            def __init__(self, data):
-                self._data = np.array(data)
-            def numpy(self):
-                return self._data
-
-        class MockBoxes:
-            def __init__(self, data):
-                self.tensor = MockTensor(data)
-
-        class MockInstances:
-            def __init__(self):
-                self.pred_boxes = MockBoxes([[100, 100, 200, 200]])
-                self.scores = MockTensor([0.95])
-                self.pred_classes = MockTensor([0])
-                self.pred_keypoints = MockTensor(
-                    [[[150, 120, 0.9], [140, 115, 0.5], [160, 115, 0.0]]]
-                )
-                self._fields = {"pred_boxes", "scores", "pred_classes", "pred_keypoints"}
-
-            def to(self, device):
-                return self
-            def has(self, field):
-                return field in self._fields
-            def __len__(self):
-                return 1
-
-        labels = [{"id": 0, "name": "person", "keypoints": [
-            {"id": 0, "name": "nose"},
-            {"id": 1, "name": "left_eye"},
-            {"id": 2, "name": "right_eye"},
-        ]}]
-
-        detections = pf.from_mayaku(MockInstances(), labels=labels)
-        assert len(detections) == 1
-        assert detections[0].keypoints is not None
-        assert len(detections[0].keypoints) == 3
-        assert detections[0].keypoints[0].name == "nose"
-        assert detections[0].keypoints[0].x == 150
-        assert [kp.id for kp in detections[0].keypoints] == [0, 1, 2]
-        assert detections[0].keypoints[0].confidence == pytest.approx(0.9)
-        assert detections[0].keypoints[1].confidence == pytest.approx(0.5)
-        assert detections[0].keypoints[2].confidence == pytest.approx(0.0)
-
-    def test_from_mayaku_with_masks(self):
-        """Test Mayaku mask conversion. Masks are (N, H, W) bool after postprocess."""
-        class MockTensor:
-            def __init__(self, data):
-                self._data = np.array(data)
-            def numpy(self):
-                return self._data
-
-        class MockBoxes:
-            def __init__(self, data):
-                self.tensor = MockTensor(data)
-
-        class MockInstances:
-            def __init__(self):
-                self.pred_boxes = MockBoxes([[10, 10, 20, 20]])
-                self.scores = MockTensor([0.9])
-                self.pred_classes = MockTensor([0])
-                # (N=1, H=4, W=4) bool mask
-                self.pred_masks = MockTensor([[[True, True, False, False],
-                                                [True, True, False, False],
-                                                [False, False, False, False],
-                                                [False, False, False, False]]])
-                self._fields = {"pred_boxes", "scores", "pred_classes", "pred_masks"}
-
-            def to(self, device):
-                return self
-            def has(self, field):
-                return field in self._fields
-            def __len__(self):
-                return 1
-
-        detections = pf.from_mayaku(MockInstances())
-        assert len(detections) == 1
-        assert detections[0].masks is not None
-        assert len(detections[0].masks) == 1
-        mask = detections[0].masks[0]
-        assert mask.dtype == bool
-        assert mask.shape == (4, 4)
-        assert mask[0, 0] == True
-        assert mask[3, 3] == False
 
 
 # ============================================================================
