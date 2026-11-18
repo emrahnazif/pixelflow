@@ -41,8 +41,10 @@ pf.save_image("street-sliced.jpg", image)
 ![Boxes around many small people at the back of a crowded street, and a man in the front covered by several partial boxes](/docs/assets/sliced-inference.jpg)
 
 `predict` takes the image and a function that turns one slice into `Detections`. It calls that
-function once per slice, here 12 times for 4 columns and 3 rows, and moves each box from slice
-to image coordinates.
+function once per slice, here 12 times for 4 columns and 3 rows, and moves each detection from
+slice to image coordinates: its box, and its mask, outline and keypoints if it has them. A mask
+is placed on an image-sized canvas, so with a segmentation model such as `mayaku-n-seg`,
+[`pf.annotate.mask`](/docs/visualization/mask.md) draws the result on the whole image.
 
 On the whole 1920×1280 image, the model finds 11 objects with a confidence of 0.5 or more,
 8 of them people. On the slices it finds 26, 19 of them people, most at the back of the street.
@@ -60,11 +62,8 @@ scooter. Use slicing
 when the objects you want are small compared to the image, such as people in a wide view,
 vehicles in an aerial photo or defects on a large scan.
 
-Only boxes are moved to image coordinates: masks, outlines and keypoints stay in the
-coordinates of their slice. Use a detection model, not a segmentation or keypoint model.
-
-The function must return `Detections`; anything else is treated as no detections, without an
-error.
+The function must return `Detections`: convert the model's output inside it, as above.
+Anything else raises a `TypeError`.
 
 ## Slice size and overlap
 
@@ -91,7 +90,8 @@ from the highest confidence down, and compares only boxes of the same class:
 - boxes from neighbouring slices overlapping with an IoU above 0.7 × `iou_threshold`
   (0.35 by default) are the same object;
 - other boxes are the same object above `iou_threshold`;
-- a box that lies at least 90% inside another box of the same class is removed.
+- a box that lies more than `ios_threshold` (90% by default) inside another box of the same
+  class is removed.
 
 IoU is the area two boxes share divided by the area they cover together. With
 `merge_mode="nmm"`, duplicates from neighbouring slices are replaced by their average box,
@@ -108,7 +108,7 @@ weighted by confidence, instead of keeping only the best one.
 | `overlap_ratio_h` | `0.2` | vertical overlap between slices, from 0 to 0.9 |
 | `overlap_ratio_w` | `0.2` | horizontal overlap between slices, from 0 to 0.9 |
 | `iou_threshold` | `0.5` | IoU above which two boxes are the same object |
-| `ios_threshold` | `0.5` | share of a box inside another; below 0.9 it has no effect |
+| `ios_threshold` | `0.9` | share of a box inside another above which it is removed |
 | `merge_mode` | `"nms"` | `"nms"` keeps the best box, `"nmm"` averages duplicates |
 
 `slicer.predict(image, detector_func, verbose=False, **detector_kwargs)`:

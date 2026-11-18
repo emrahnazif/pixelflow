@@ -29,9 +29,10 @@ pf.save_image("street-crop.jpg", crop)
 ![An 800×600 crop of a street photo with boxes still around the people, the umbrella and the motorcycles in it](/docs/assets/transforms-crop.jpg)
 
 The crop is the area from (600, 400) to (1400, 1000). Of the 11 detections, `crop_detections`
-keeps the 7 whose box touches it, with coordinates measured from the crop's top-left corner.
-Boxes are not cut at the edge of the crop: a box that crosses it keeps its full size, partly
-outside the image, such as the motorcycle on the left, from x = −600 to 34.
+keeps the 7 whose box overlaps it, with coordinates measured from the crop's top-left corner.
+A box that crosses the edge is cut there, so it covers the part of the object that is in the
+crop: the motorcycle on the left, which extends 600 pixels past the crop, becomes a box from
+x = 0 to 34. A crop area that goes past the image is cut to the image first.
 
 ## Resize
 
@@ -95,8 +96,9 @@ pf.save_image("street-rotated.jpg", image)
 A box stays upright: after a rotation, it becomes the smallest upright box around the turned
 one, so it is larger than the object. Masks and keypoints follow the object exactly.
 
-`crop_detections` drops keypoints that fall outside the crop, so the keypoint list of a person
-cut by the crop is shorter.
+`crop_detections` keeps every keypoint, even outside the crop, so each keypoint stays at its
+place in the list; those outside have coordinates below 0 or past the crop's size. Outlines and
+polygon masks are moved but not cut either.
 
 ## Crop around each detection
 
@@ -131,10 +133,16 @@ crop, inside = pf.transform.crop_detections(image, detections, [600, 400, 1400, 
 original = pf.transform.inverse_transforms(inside)
 ```
 
+Every transform is undone exactly: the boxes come back as they were before the first
+transform, and masks come back at the size of the original image. On the street photo, the 10
+detections left after a 15° rotation, a crop and 10% padding all come back to their original
+boxes.
+
+A box loses information in a rotation, which makes it larger, and in a crop, which cuts it, so
+each transform also records the box as it was. If you change a box between the transforms and
+`inverse_transforms`, that record no longer applies, and the box is mapped back by geometry
+alone: after a rotation, it comes back as the upright box around the turned-back box, larger
+than the object.
+
 It works on detections that went through the transforms, not on new results from a model you
 run on the transformed image: those have no history.
-
-In this version, `inverse_transforms` undoes crops and flips exactly, but not rotations or
-`add_padding`: a rotated box comes back in the wrong place, and a padded box comes back
-smaller than it was before padding. Keep the detections from before those transforms instead. A
-cropped mask stays the size of the crop.

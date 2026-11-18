@@ -8,8 +8,8 @@ keywords: pixelflow, frame buffer, temporal context, video delay, moving average
 
 Some decisions about a frame are easier with the frames around it: a count that jumps from one
 frame to the next, a detection that appears for a single frame. `pf.Buffer` keeps the last few
-frames with their results and hands you the one in the middle, a few frames late. For that
-frame, you have both the frames before it and the frames after it.
+frames with their results and hands each one back a few frames late, once the frames after it
+have arrived. For that frame, you have both the frames before it and the frames after it.
 
 ```python
 import pixelflow as pf
@@ -18,6 +18,15 @@ from mayaku import from_pretrained
 predictor = from_pretrained("mayaku-n-det")
 person = predictor.class_names.index("Person")
 buffer = pf.Buffer(frames=5)
+counts = []
+
+
+def process(people, frame):
+    context = buffer.get_temporal_context()
+    window = context["past_results"] + [people] + context["future_results"]
+    counts.append((len(people), sum(len(d) for d in window) / len(window)))
+    writer.write(pf.annotate.box(frame, people))
+
 
 video = pf.VideoReader("crowd.mp4")
 with pf.VideoWriter("crowd-buffered.mp4", like=video) as writer:
@@ -27,68 +36,72 @@ with pf.VideoWriter("crowd-buffered.mp4", like=video) as writer:
         people = detections.filter_by_confidence(0.5).filter_by_class_id(person)
 
         people, frame = buffer.update(people, frame)
-        if not buffer.is_full:
-            continue
+        if frame is not None:
+            process(people, frame)
 
-        context = buffer.get_temporal_context()
-        window = context["past_results"] + [people] + context["future_results"]
-        average = sum(len(d) for d in window) / len(window)
-        if buffer.frames_processed % 50 == 0:
-            print(f"{len(people)} people in this frame, {average:.1f} on average")
+    for people, frame in buffer.flush():
+        process(people, frame)
 
-        frame = pf.annotate.box(frame, people)
-        writer.write(frame)
+print(writer.frames_written)
+for index in (0, 100, 200, 340):
+    count, average = counts[index]
+    print(f"frame {index}: {count} people, {average:.1f} on average")
 ```
 
 ```text
-21 people in this frame, 22.6 on average
-29 people in this frame, 29.2 on average
-23 people in this frame, 23.0 on average
-27 people in this frame, 27.6 on average
-21 people in this frame, 21.6 on average
-16 people in this frame, 16.4 on average
+341
+frame 0: 24 people, 23.7 on average
+frame 100: 29 people, 28.8 on average
+frame 200: 26 people, 26.2 on average
+frame 340: 21 people, 21.6 on average
 ```
 
 ![A frame of a crowded hall seen from above, with a box around each person](/docs/assets/buffer.jpg)
 
-`buffer.update(results, frame)` stores the new frame and its results, and returns the frame and
-results from the middle of the buffer: with `frames=5`, the ones from 2 frames ago. They always
-belong together, so the boxes you draw are the right ones for the frame you draw on.
+`buffer.update(results, frame)` stores the new frame and its results, and returns a frame and
+its results from earlier: with `frames=5`, the ones from 2 frames ago. They always belong
+together, so the boxes you draw are the right ones for the frame you draw on.
 
-`get_temporal_context()` returns the whole buffer around that middle frame. Above, the count of
-each frame is averaged with the 2 frames before and the 2 after. Because the window is centered
-on the frame, the average does not lag behind the crowd, as an average of past frames only
-would.
+`get_temporal_context()` returns the buffer around that frame. Above, the count of each frame is
+averaged with the 2 frames before it and the 2 after. Because the window is centered on the
+frame, the average does not lag behind the crowd, as an average of past frames only would.
 
 ## The first and last frames
 
-Until the buffer is full, `update` returns a black frame and empty `Detections`: with
-`frames=5`, for the first 4 calls. Skip them with `if not buffer.is_full: continue`, as above,
-or the output video starts with black frames.
+For the first 2 calls, nothing is ready: frame 0 needs frames 1 and 2 after it. `update` returns
+`(None, None)`, hence `if frame is not None`. From the third call on, it returns frames 0, 1,
+2 and so on, in order.
 
-The buffer does not return the first 2 and the last 2 frames of the video: the first ones were
-only ever "past" for frame 2, and the last ones are still in the buffer when the loop ends.
-Above, the output video has 337 of the 341 frames.
+When the video ends, the last 2 frames are still in the buffer, waiting for frames that will
+not come. `flush()` returns them. With both, every frame comes out once: above, 341 frames in,
+341 out.
+
+Near the start, a frame has fewer frames before it, and near the end, fewer after it: frame 0
+is averaged over 3 frames, not 5. If your processing needs the full window, check the length
+of `past_results` and `future_results`. `pf.smooth` does this: it smooths only frames with a
+full window, and returns the others as they are.
 
 `buffer.delay` is how many frames late the output is: `frames // 2`. A larger buffer gives more
-context and a longer delay. Use an odd number of frames, so that there is one frame in the
-middle.
+context and a longer delay. Use an odd number of frames, so the frame in the middle has the same
+number of frames on each side.
 
 ## The context
 
-`get_temporal_context()` returns `None` until the buffer is full, then a dictionary:
+`get_temporal_context()` describes the frame `update` or `flush` returned last. It returns
+`None` before the first one, then a dictionary:
 
 | Key | |
 |-----|---|
-| `past_frames`, `past_results` | lists of the frames and results before the middle one, oldest first |
-| `current_frame`, `current_results` | the middle frame and results, the ones `update` returned |
+| `past_frames`, `past_results` | lists of the frames and results before it, oldest first |
+| `current_frame`, `current_results` | the frame and results `update` or `flush` returned |
 | `future_frames`, `future_results` | lists of the frames and results after it, oldest first |
 
 The results can be anything you pass to `update`: `Detections`, a count or a dictionary of your
 own.
 
 `get_buffer_contents()` returns `(results, frames)` as two lists, oldest first. `reset()` empties
-the buffer, for example before the next video.
+the buffer. Calling `update` after `flush()` starts again with an empty buffer, so the frames of
+the next video do not mix with the last one.
 
 ## Parameters
 
@@ -100,8 +113,8 @@ the buffer, for example before the next video.
 
 | Attribute | |
 |-----------|---|
-| `is_full` | whether the buffer holds `frames` frames |
 | `delay` | how many frames late `update` returns: `frames // 2` |
+| `is_full` | whether the buffer holds `frames` frames |
 | `frames_processed` | number of `update` calls since the start or the last `reset()` |
 | `current_size` | number of frames in the buffer now |
 

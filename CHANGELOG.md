@@ -16,6 +16,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   converter read fixed columns, so every tracked detection had its track id as its
   confidence (1.0, 2.0, ...) and a class taken from the confidence. It now reads
   `boxes.xyxy`, `boxes.conf` and `boxes.cls`.
+- **`inverse_transforms` undoes rotations.** It rebuilt the rotation for the wrong canvas,
+  so a box rotated 30° came back hundreds of pixels away. It now applies the inverse of the
+  matrix `rotate_detections` recorded to boxes, keypoints, outlines and masks. Raster masks
+  are now warped with nearest-neighbour interpolation in both directions.
+- **`inverse_transforms` undoes `add_padding` exactly.** The padding was recomputed from the
+  padded box, so boxes came back smaller ([100, 200, 300, 400] padded by 0.1 came back as
+  [104, 204, 296, 396]). `add_padding` now records the padding in pixels; older history
+  without it is left padded, with a warning.
+- **Round trips through `rotate_detections` and `crop_detections` give the original boxes
+  back.** Both record the box before and after; when the box is unchanged at inversion, the
+  original is restored instead of the larger envelope (rotation) or the cut box (crop).
+  `inverse_transforms` after a crop also puts raster masks back at the original image size.
+- **`crop_detections` cuts boxes at the crop's edge** instead of leaving coordinates outside
+  the cropped image (a box from x = -600 to 34). A crop area past the image is clipped first,
+  so boxes no longer shift by the part that was outside. Keypoints outside the crop are kept,
+  so their positions in the list stay the same. A box that only touches the crop is dropped.
+- **`Buffer` returns every frame.** The first `delay` frames were never returned and the last
+  `delay` stayed in the buffer, so 5 frames of every video were lost with `frames=5`.
+  `update` now returns `(None, None)` while nothing is ready, instead of a black frame and
+  empty `Detections` that ended up in output videos, and returns frame 0 as soon as its
+  future frames have arrived. The new `Buffer.flush()` yields the frames left at the end.
+  Loops that tested `buffer.is_full` should test `frame is None`. `smooth` follows the frame
+  the buffer returned and smooths it only with a full window; frames near the start and end
+  are returned unsmoothed.
+- **`SlicedInference` moves masks, outlines and keypoints to image coordinates**, not only
+  boxes; raster masks are placed on an image-sized canvas. A `detector_func` that returns
+  something other than `Detections` raises `TypeError`; it was silently treated as no
+  detections. `ios_threshold` is now applied as given (it had no effect below 0.9); its
+  default is 0.9, which keeps the previous results. An overlap of 1.0 no longer hangs
+  `generate_slices`. `min_slice_area_ratio` never had an effect: passing it warns, and it
+  will be removed.
+- **`from_pil` returns RGB `uint8` HxWx3 for every PIL mode**: RGBA gave four channels and
+  grayscale two dimensions. An alpha channel is dropped with a warning, as in `read_image`.
+- **Docstrings:** `gamma_correction` said values below 1 brighten; the code brightens above
+  1, and the docstring now says so. The transform docstrings no longer say detections are
+  modified in place (a copy is returned) and no longer read images with `cv2.imread`, which
+  gives BGR.
 
 ### Removed
 
