@@ -7,8 +7,8 @@ keywords: pixelflow, computer vision, object detection, annotation, tracking
 template: docs
 -->
 
-Every model returns its results in its own shape: Mayaku, Ultralytics, Detectron2 and
-Transformers each have their own objects, field names and box formats. PixelFlow converts
+Every model returns its results in its own shape: Mayaku, Ultralytics, RF-DETR and
+Detectron2 each have their own objects, field names and box formats. PixelFlow converts
 them into one format, so the code that comes after the model (filtering, tracking, counting
 objects in a zone, drawing the results, writing a video) is written once and works with any
 of them.
