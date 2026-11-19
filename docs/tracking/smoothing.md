@@ -48,13 +48,13 @@ print(writer.frames_written, "frames")
 The buffer hands each frame back 2 frames late, once the 2 frames after it have arrived;
 `pf.smooth(buffer)` then returns that frame's detections, each box averaged with the same
 object's boxes in the 2 frames before and the 2 after. Objects are matched by `tracker_id`, so
-smoothing needs a [tracker](/docs/tracking/tracker.md): detections without an id are left out of
-the result, and if none of a frame's detections has one, `smooth` warns and returns them as they
-are. Class, id, masks and keypoints come from the frame itself; only the box and the confidence
-are averaged.
+smoothing needs a [tracker](/docs/tracking/tracker.md): a detection without an id comes back
+unsmoothed, and if no detection in the buffer has one, `smooth` warns. Only the box and the confidence
+are averaged; class, id, masks, keypoints, zones, line crossings and times stay the frame's own.
+The result keeps the frame's order and is always a new `Detections`: the buffer is not changed.
 
 Near the start and the end of the video, a frame does not have 2 frames on each side: `smooth`
-returns its detections as they are.
+returns its detections unsmoothed.
 
 ## How much smoother
 
@@ -69,9 +69,9 @@ mean absolute second difference, in pixels):
 | | Box center x | Box center y | Width | Height | Filled in | Delay |
 |-|--------------|--------------|-------|--------|-----------|-------|
 | Boxes from the model | 0.95 | 1.39 | 1.79 | 2.35 | | |
-| `Buffer(frames=5)` | 0.21 | 0.38 | 0.40 | 0.58 | 18 | 2 frames |
-| `Buffer(frames=5)`, `temporal_weight_decay=0.5` | 0.27 | 0.48 | 0.52 | 0.75 | 18 | 2 frames |
-| `Buffer(frames=9)` | 0.14 | 0.26 | 0.26 | 0.37 | 43 | 4 frames |
+| `Buffer(frames=5)` | 0.20 | 0.38 | 0.39 | 0.57 | 18 | 2 frames |
+| `Buffer(frames=5)`, `temporal_weight_decay=0.5` | 0.27 | 0.48 | 0.51 | 0.74 | 18 | 2 frames |
+| `Buffer(frames=9)` | 0.14 | 0.25 | 0.25 | 0.36 | 43 | 4 frames |
 
 The cost is delay, 80 ms at 25 fps for 5 frames. Boxes that follow fast changes of direction
 need a small buffer; slow scenes can take a larger one.
@@ -79,8 +79,10 @@ need a small buffer; slow scenes can take a larger one.
 ## Boxes filled in
 
 When an object has no box in a frame but has one in the frames before and after it, `smooth` adds
-one: halfway between its nearest box before and its nearest box after, with 85% of their average
-confidence. Those detections carry `metadata={"interpolated": True}`:
+one, after the frame's own detections. It goes where the object should be between its nearest box
+before and its nearest box after: two thirds of the way if those are 2 frames before and 1 after.
+Its masks, outline and keypoints move with it, it has 85% of their average confidence and no line
+crossings, and its metadata gets `"interpolated": True`:
 
 ```python
 filled = [d for d in pf.smooth(buffer) if d.metadata and d.metadata.get("interpolated")]
@@ -95,6 +97,5 @@ filled = [d for d in pf.smooth(buffer) if d.metadata and d.metadata.get("interpo
 | `buffer` | | the `pf.Buffer` holding tracked detections; `update` or `flush` must have returned a frame |
 | `temporal_weight_decay` | `0.8` | weight of each step away from the smoothed frame, from 0.1 to 1 |
 
-When it smooths, it returns a new `Detections` and leaves the buffer unchanged. See
-[look at past and future frames with a buffer](/docs/utilities/buffer.md) for `Buffer`'s own
+See [look at past and future frames with a buffer](/docs/utilities/buffer.md) for `Buffer`'s own
 options.
