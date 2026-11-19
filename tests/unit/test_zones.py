@@ -420,6 +420,17 @@ class TestZoneCrossingEdgeCases:
 
         assert len(updated) == 0
 
+    def test_crossing_rejects_anchors_it_cannot_test(self):
+        """A crossing tests one point of each box: lists and region strategies are refused."""
+        crossings = pf.Crossings()
+        for anchor in (["center", "bottom_center"], "overlap", "percentage"):
+            with pytest.raises(ValueError, match="one point"):
+                crossings.add_crossing(start=(0, 0), end=(10, 0), triggering_anchor=anchor)
+        line = crossings.add_crossing(start=(0, 0), end=(10, 0), triggering_anchor="bottom_center")
+        with pytest.raises(ValueError, match="one point"):
+            crossings.update(pf.Detections(), strategy="any_corner")
+        assert line.triggering_anchor == "bottom_center"
+
     def test_crossing_with_untracked_detections(self, sample_detections):
         """Test crossings with detections without tracker IDs."""
         crossings = pf.Crossings()

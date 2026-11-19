@@ -28,6 +28,19 @@ STRATEGY_CONTAINS = "contains"
 STRATEGY_PERCENTAGE = "percentage"
 
 # All valid strategy strings
+# The strategies that name a single point of a box (what get_anchor_position returns).
+POINT_STRATEGIES = {
+    STRATEGY_CENTER,
+    STRATEGY_BOTTOM_CENTER,
+    STRATEGY_TOP_LEFT,
+    STRATEGY_TOP_RIGHT,
+    STRATEGY_BOTTOM_LEFT,
+    STRATEGY_BOTTOM_RIGHT,
+    STRATEGY_TOP_CENTER,
+    STRATEGY_LEFT_CENTER,
+    STRATEGY_RIGHT_CENTER,
+}
+
 VALID_STRATEGIES = {
     STRATEGY_CENTER,
     STRATEGY_BOTTOM_CENTER,

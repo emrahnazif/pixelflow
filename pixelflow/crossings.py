@@ -11,10 +11,20 @@ control applications.
 from __future__ import annotations
 
 from collections import Counter, defaultdict, deque
-from typing import Any, Dict, List, Optional, Tuple, Union, Literal
+from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 
-from .strategies import validate_strategy, get_anchor_position, STRATEGY_CENTER
+from .strategies import POINT_STRATEGIES, get_anchor_position
+
+
+def _validate_point_anchor(anchor: str) -> str:
+    """Return ``anchor`` if it is one point of a box; a crossing tests a single point."""
+    if not isinstance(anchor, str) or anchor not in POINT_STRATEGIES:
+        raise ValueError(
+            f"A crossing tests one point of each box; triggering_anchor must be one of "
+            f"{', '.join(sorted(POINT_STRATEGIES))}, got {anchor!r}"
+        )
+    return anchor
 
 
 class Crossing:
@@ -32,7 +42,7 @@ class Crossing:
     2. Validating crossings using temporal consistency (debouncing)
     3. Enforcing minimum distance requirements to filter out noise
     4. Maintaining directional state history to detect actual crossings
-    5. Supporting multiple anchor points for different object types
+    5. Letting each line test the box point that suits the objects (center, bottom center...)
     
     Args:
         start (Tuple[float, float]): Starting point of the line (x, y) in pixels
@@ -41,16 +51,13 @@ class Crossing:
         name (str): Human-readable name for the crossing. Auto-generated if empty
         color (Optional[Tuple[int, int, int]]): RGB color tuple for visualization. 
                                                Auto-generated if None
-        triggering_anchor (Union[str, List[str]]): Anchor point(s) to check for crossing.
+        triggering_anchor (str): Anchor point to check for crossing.
                                                   Options: "center", "bottom_center", 
                                                   "top_left", "top_right", "bottom_left", 
                                                   "bottom_right". Default is "center"
         minimum_crossing_threshold (int): Number of consecutive frames an object must be
                                          on the opposite side to count as crossed. 
                                          Range: [1, inf]. Default is 1
-        mode (Literal["any", "all"]): Logic mode for multiple anchor strategies.
-                                     "all" uses AND logic, "any" uses OR logic. 
-                                     Default is "all"
         boundary_margin (float): Distance in pixels from line endpoints where crossings
                                 are still considered valid. Range: [0, inf]. Default is 50.0
         debounce_time (int): Number of frames to wait before allowing another crossing
@@ -109,15 +116,6 @@ class Crossing:
         ...     name="Precision Gate"
         ... )
         >>> 
-        >>> # Multiple anchor point strategy for complex objects
-        >>> multi_crossing = pf.crossings.Crossing(
-        ...     start=(0, 300), 
-        ...     end=(640, 300),
-        ...     triggering_anchor=["center", "bottom_center"],
-        ...     mode="any",
-        ...     boundary_margin=25.0
-        ... )
-        >>> 
         >>> # Per-class counting analysis
         >>> person_results = tracker.update(person_detections)
         >>> crossed_in, crossed_out = crossing.trigger(person_results)
@@ -155,9 +153,8 @@ class Crossing:
         line_id: Union[int, str] = 0,
         name: str = "",
         color: Optional[Tuple[int, int, int]] = None,
-        triggering_anchor: Union[str, List[str]] = "center",
+        triggering_anchor: str = "center",
         minimum_crossing_threshold: int = 1,
-        mode: Literal["any", "all"] = "all",
         boundary_margin: float = 50.0,
         debounce_time: int = 30,
         minimum_distance: float = 10.0,
@@ -182,19 +179,15 @@ class Crossing:
             color (Optional[Tuple[int, int, int]]): RGB color tuple (0-255) for visualization.
                                                    If None, auto-generates color based on line_id.
                                                    Default is None
-            triggering_anchor (Union[str, List[str]]): Anchor point(s) on bounding boxes to use
-                                                      for crossing detection. Single string or list
-                                                      of strings. Options: "center", "bottom_center",
-                                                      "top_left", "top_right", "bottom_left",
-                                                      "bottom_right". Default is "center"
+            triggering_anchor (str): The point of each box tested against the line: "center",
+                                     "bottom_center", "top_center", "left_center",
+                                     "right_center", "top_left", "top_right", "bottom_left" or
+                                     "bottom_right". Other values raise ValueError.
+                                     Default is "center"
             minimum_crossing_threshold (int): Number of consecutive frames an object must remain
                                              on the opposite side of the line to register as crossed.
                                              Higher values reduce false positives. Range: [1, inf].
                                              Default is 1
-            mode (Literal["any", "all"]): Logic mode for multiple anchor point strategies.
-                                         "all" requires ALL anchor points to cross (AND logic),
-                                         "any" requires ANY anchor point to cross (OR logic).
-                                         Only relevant when triggering_anchor is a list. Default is "all"
             boundary_margin (float): Distance in pixels from line endpoints where objects are still
                                     considered for crossing detection. Prevents false negatives from
                                     objects passing slightly outside the line segment. Range: [0, inf].
@@ -240,16 +233,6 @@ class Crossing:
             ...     boundary_margin=25.0
             ... )
             >>> 
-            >>> # Multi-anchor crossing for complex objects
-            >>> vehicle_crossing = pf.crossings.Crossing(
-            ...     start=(0, 200),
-            ...     end=(640, 200),
-            ...     triggering_anchor=["center", "bottom_center", "top_center"],
-            ...     mode="any",
-            ...     color=(255, 0, 0),
-            ...     metadata={"type": "vehicle", "lane": 1}
-            ... )
-            >>> 
             >>> # High-frequency crossing with minimal debouncing
             >>> rapid_crossing = pf.crossings.Crossing(
             ...     start=(200, 100),
@@ -265,7 +248,6 @@ class Crossing:
             - All numeric parameters are automatically clamped to valid ranges
             - Temporal tracking structures are initialized but remain empty until first use
             - The line equation ax + by + c = 0 is computed for fast point-to-line calculations
-            - Multiple anchor point mode requires strategy validation for all anchor types
             
         Performance Notes:
             - Initialization is O(1) and very fast regardless of parameter values
@@ -290,8 +272,7 @@ class Crossing:
         # no detection has had one for a while. False once ids were seen or the warning given.
         self._check_tracker_ids = True
         
-        # Validate triggering_anchor
-        triggering_anchor = validate_strategy(triggering_anchor)
+        triggering_anchor = _validate_point_anchor(triggering_anchor)
         
         self.minimum_crossing_threshold = max(1, minimum_crossing_threshold)
         
@@ -300,8 +281,6 @@ class Crossing:
         
         # Store configuration for simplified system
         self.triggering_anchor = triggering_anchor
-        self.mode = mode
-        self.use_multiple_anchors = isinstance(triggering_anchor, (list, tuple))
         
         # Single anchor history (existing behavior)
         self.crossing_state_history: Dict[int, deque] = defaultdict(
@@ -612,7 +591,7 @@ class Crossing:
         margin_ratio = margin / (line_length_sq ** 0.5)
         return -margin_ratio <= t <= 1.0 + margin_ratio
     
-    def trigger(self, detections, strategy: Union[str, List[str]] = None) -> Tuple[np.ndarray, np.ndarray]:
+    def trigger(self, detections, strategy: Optional[str] = None) -> Tuple[np.ndarray, np.ndarray]:
         """
         Detect line crossings and update directional counts using temporal validation algorithm.
         
@@ -637,7 +616,7 @@ class Crossing:
                        bounding boxes and tracker IDs. Each prediction must have
                        .tracker_id (int) and .bbox (4-tuple) attributes for crossing
                        detection to work properly
-            strategy (Optional[Union[str, List[str]]]): Override anchor point strategy
+            strategy (Optional[str]): Override anchor point strategy
                                                        for this trigger call. If None,
                                                        uses the crossing's configured
                                                        triggering_anchor. Valid strategies:
@@ -720,7 +699,7 @@ class Crossing:
         """
         # Validate override strategy if provided
         if strategy is not None:
-            strategy = validate_strategy(strategy)
+            strategy = _validate_point_anchor(strategy)
         
         # Increment frame counter for temporal tracking
         self.frame_count += 1
@@ -761,30 +740,28 @@ class Crossing:
             # Get tracker ID early for use in boundary checking
             tracker_id = prediction.tracker_id
             
-            # TODO: Implement full multi-anchor logic for simplified system
-            # For now, always use single anchor behavior
-            if True:
-                # Use override strategy or crossing's own strategy
-                detection_strategy = strategy if strategy is not None else self.triggering_anchor
-                # Single anchor (existing behavior)
-                point = get_anchor_position(prediction.bbox, detection_strategy)
-                
-                # First check if the point is near the line segment
-                # This prevents counting objects that pass beside the line
-                if not self._is_point_near_line_segment(point):
-                    # Clear history for trackers that move away from the line
-                    if tracker_id in self.crossing_state_history:
-                        self.crossing_state_history[tracker_id].clear()
-                    continue
-                
-                side = self._point_side_of_line(point)
-                
-                if side == 0:  # Point is exactly on the line, skip
-                    continue
-                
-                # Determine position: True for left side, False for right side
-                tracker_state = side > 0
+            # Use override strategy or crossing's own strategy
+            detection_strategy = strategy if strategy is not None else self.triggering_anchor
+            # Single anchor (existing behavior)
+            point = get_anchor_position(prediction.bbox, detection_strategy)
             
+            # First check if the point is near the line segment
+            # This prevents counting objects that pass beside the line
+            if not self._is_point_near_line_segment(point):
+                # Clear history for trackers that move away from the line
+                if tracker_id in self.crossing_state_history:
+                    self.crossing_state_history[tracker_id].clear()
+                continue
+            
+            side = self._point_side_of_line(point)
+            
+            if side == 0:  # Point is exactly on the line, skip
+                continue
+            
+            # Determine position: True for left side, False for right side
+            tracker_state = side > 0
+        
+
             # Update crossing history
             class_id = prediction.class_id if prediction.class_id is not None else -1
             
@@ -794,17 +771,7 @@ class Crossing:
             elif class_id not in self.class_id_to_name:
                 self.class_id_to_name[class_id] = str(class_id)
             
-            # Use appropriate history tracking based on mode
-            if self.use_multiple_anchors:
-                # For multiple anchors, we simplify by using the combined result
-                # Create a simple history for the combined state
-                if not hasattr(self, 'multi_anchor_history'):
-                    self.multi_anchor_history: Dict[int, deque] = defaultdict(
-                        lambda: deque(maxlen=self.crossing_history_length)
-                    )
-                crossing_history = self.multi_anchor_history[tracker_id]
-            else:
-                crossing_history = self.crossing_state_history[tracker_id]
+            crossing_history = self.crossing_state_history[tracker_id]
             
             crossing_history.append(tracker_state)
             
@@ -824,12 +791,7 @@ class Crossing:
             if oldest_state == newest_state:
                 continue
             
-            # Get the current position for validation
-            if self.use_multiple_anchors:
-                # Use center point for distance tracking when multiple anchors
-                current_point = get_anchor_position(prediction.bbox, STRATEGY_CENTER)
-            else:
-                current_point = point
+            current_point = point
             
             # Validate temporal consistency before counting
             if not self._validate_crossing_timing(tracker_id):
@@ -1013,13 +975,7 @@ class Crossing:
         self._in_count_per_class.clear()
         self._out_count_per_class.clear()
         
-        if self.use_multiple_anchors:
-            if hasattr(self, 'multi_anchor_history'):
-                self.multi_anchor_history.clear()
-            if hasattr(self, 'anchor_crossing_histories'):
-                self.anchor_crossing_histories.clear()
-        else:
-            self.crossing_state_history.clear()
+        self.crossing_state_history.clear()
             
         self.class_id_to_name.clear()
         
@@ -1168,9 +1124,8 @@ class Crossings:
         line_id: Optional[Union[int, str]] = None,
         name: str = "",
         color: Optional[Tuple[int, int, int]] = None,
-        triggering_anchor: Union[str, List[str]] = "center",
+        triggering_anchor: str = "center",
         minimum_crossing_threshold: int = 1,
-        mode: Literal["any", "all"] = "all",
         boundary_margin: float = 50.0,
         debounce_time: int = 30,
         minimum_distance: float = 10.0,
@@ -1193,15 +1148,10 @@ class Crossings:
             color (Optional[Tuple[int, int, int]]): RGB color tuple (0-255) for visualization.
                                                    If None, auto-generates distinct color.
                                                    Default is None
-            triggering_anchor (Union[str, List[str]]): Anchor point(s) for crossing detection.
-                                                      Single string or list of strings.
-                                                      Valid options: "center", "bottom_center",
-                                                      "top_left", "top_right", "bottom_left",
-                                                      "bottom_right". Default is "center"
+            triggering_anchor (str): The point of each box tested against the line, one of
+                                     the nine box points (see Crossing). Default is "center"
             minimum_crossing_threshold (int): Consecutive frames required on opposite side
                                              to register crossing. Range: [1, inf]. Default is 1
-            mode (Literal["any", "all"]): Logic for multiple anchor strategies. "all" uses
-                                         AND logic, "any" uses OR logic. Default is "all"
             boundary_margin (float): Distance in pixels beyond line endpoints where crossings
                                     are still detected. Range: [0, inf]. Default is 50.0
             debounce_time (int): Frames to wait before allowing repeat crossing for same tracker.
@@ -1242,16 +1192,6 @@ class Crossings:
             ...     color=(255, 0, 0)
             ... )
             >>> 
-            >>> # Multi-anchor crossing for complex objects
-            >>> crossing3 = crossings.add_crossing(
-            ...     start=(0, 350), 
-            ...     end=(640, 350),
-            ...     line_id="vehicle_gate",
-            ...     triggering_anchor=["center", "bottom_center"],
-            ...     mode="any",
-            ...     metadata={"purpose": "vehicle_counting", "lane": 1}
-            ... )
-            >>> 
             >>> print(f"Total crossings: {len(crossings.crossings)}")
             Total crossings: 3
         
@@ -1287,7 +1227,6 @@ class Crossings:
             color=color,
             triggering_anchor=triggering_anchor,
             minimum_crossing_threshold=minimum_crossing_threshold,
-            mode=mode,
             boundary_margin=boundary_margin,
             debounce_time=debounce_time,
             minimum_distance=minimum_distance,
@@ -1373,7 +1312,7 @@ class Crossings:
         """
         return self._crossing_dict.get(line_id)
     
-    def update(self, results, strategy: Union[str, List[str]] = None):
+    def update(self, results, strategy: Optional[str] = None):
         """
         Process detections against all managed crossings and annotate results with crossing events.
         
@@ -1393,7 +1332,7 @@ class Crossings:
             results: PixelFlow Results object containing detection predictions with bounding boxes
                     and tracker IDs. Must have .detections list with objects containing .tracker_id
                     and .bbox attributes for crossing detection to function properly
-            strategy (Optional[Union[str, List[str]]]): Optional strategy override applied to ALL
+            strategy (Optional[str]): Optional anchor point override applied to ALL
                                                        managed crossings for this update call.
                                                        If None, each crossing uses its own configured
                                                        triggering_anchor. Valid values: "center",
@@ -1470,7 +1409,7 @@ class Crossings:
         """        
         # Validate override strategy if provided
         if strategy is not None:
-            strategy = validate_strategy(strategy)
+            strategy = _validate_point_anchor(strategy)
         
         for crossing in self.crossings:
             crossed_in, crossed_out = crossing.trigger(results, strategy)

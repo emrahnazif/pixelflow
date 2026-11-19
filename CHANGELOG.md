@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and it held a frame number (with `fps`) or a `datetime`. It is now seconds from the start of
   the video with `fps`, or a Unix timestamp without; `get_tracker_stats` gives the same, and
   the `first_seen`, `zone_times` and `line_cross_times` attributes now hold seconds too.
+- **`Crossing` refuses anchors it cannot test.** A list of anchors, or a zone test such as
+  `"overlap"`, silently tested the box center. `triggering_anchor` (and the `strategy` override
+  of `Crossings.update`) must now be one of the nine box points, or it raises `ValueError`.
 - **`Crossings` no longer warns during a tracker's first frames.** It warned "No detections have
   tracker_id" on every frame without ids, which includes the first frames of every correct loop.
   It now warns once per line, if no detection has had an id after 10 frames.
@@ -92,6 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`mode` of `Crossing` and `Crossings.add_crossing`.** It was meant for lists of anchors, which
+  never worked, and was never read.
 - **`pf.tracker.ByteTracker`**, with `STrack`, `TrackState`, `KalmanFilter`, `matching` and
   `get_metrics()`. Use `pf.tracker.ByteTrack`; its parameters are `track_activation_threshold`,
   `lost_track_buffer`, `frame_rate`, `minimum_consecutive_frames`, `minimum_iou_threshold`
