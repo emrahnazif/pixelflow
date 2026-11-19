@@ -723,9 +723,12 @@ class Detection:
             self.masks = [m for m in self.masks if id(m) not in converted] or None
         return True
 
-    def copy(self) -> "Detection":
+    def copy(self, share_masks: bool = False) -> "Detection":
         """
         Create a deep copy of this detection.
+
+        With ``share_masks=True`` the copy gets a new list holding the same mask arrays,
+        for callers that change other fields only (the trackers set ``tracker_id``).
 
         Creates a new Detection instance with deep copies of all fields to ensure
         complete independence from the original. Useful for immutable transform
@@ -758,7 +761,7 @@ class Detection:
         duplicate = Detection(
             inference_id=self.inference_id,
             bbox=None,
-            masks=copy_module.deepcopy(self.masks) if self.masks else None,
+            masks=(list(self.masks) if share_masks else copy_module.deepcopy(self.masks)) if self.masks else None,
             segments=None,
             keypoints=[kp._clone() for kp in self.keypoints] if self.keypoints else None,
             class_id=self.class_id,
