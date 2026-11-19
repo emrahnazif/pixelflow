@@ -276,7 +276,8 @@ not_restricted = zones.filter_by_zones(detections, ["restricted"], exclude=True)
 
 ### Object Tracking
 
-Built-in ByteTrack for multi-object tracking:
+Five multi-object trackers, ported from [roboflow/trackers](https://github.com/roboflow/trackers):
+`ByteTrack`, `SORT`, `OCSORT`, `BoTSORT` (camera motion compensation) and `CBIoU`.
 
 ```python
 import pixelflow as pf

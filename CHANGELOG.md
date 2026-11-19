@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with its predicted box. ByteTrack's defaults change: a new track needs a confidence of
   0.7 (was 0.25) and 2 frames (was 3). Provenance and changes:
   `pixelflow/tracker/UPSTREAM.md`.
+- **More trackers from roboflow/trackers: `pf.tracker.OCSORT`, `pf.tracker.BoTSORT` and
+  `pf.tracker.CBIoU`.** OC-SORT recovers tracks after occlusions. BoT-SORT compensates camera
+  motion: pass the RGB frame as `update(detections, frame=frame)`, or a known 2x3 transform as
+  `cmc_transform=`. C-BIoU matches with buffered (enlarged) boxes, for fast or irregular motion.
+  All give the same tracker IDs as upstream on MOT17. Upstream's optional ReID (appearance)
+  matching for BoT-SORT is not ported.
 
 ### Fixed
 
