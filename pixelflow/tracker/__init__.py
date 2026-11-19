@@ -12,6 +12,7 @@ Example:
 
 from pixelflow.tracker.base import BaseTracker
 from pixelflow.tracker.bytetrack.tracker import ByteTrack
+from pixelflow.tracker.ocsort.tracker import OCSORT
 from pixelflow.tracker.sort.tracker import SORT
 from pixelflow.tracker.utils.iou import BIoU, BaseIoU, CIoU, DIoU, GIoU, IoU
 from pixelflow.tracker.utils.state_representations import (
@@ -24,6 +25,7 @@ __all__ = [
     "BaseTracker",
     "ByteTrack",
     "SORT",
+    "OCSORT",
     "BaseIoU",
     "IoU",
     "BIoU",
