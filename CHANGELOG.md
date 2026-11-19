@@ -34,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`TimeTracker` sets `first_seen_time` on every frame, in seconds.** It was set only on an
+  object's first frame, so `filter_by_first_seen_time` dropped every object on later frames,
+  and it held a frame number (with `fps`) or a `datetime`. It is now seconds from the start of
+  the video with `fps`, or a Unix timestamp without; `get_tracker_stats` gives the same, and
+  the `first_seen`, `zone_times` and `line_cross_times` attributes now hold seconds too.
 - **`pf.annotate.mask` is about 15x faster on video.** It drew and blended each mask over
   the whole frame (about 7 ms per mask at 1080p); it now works inside each mask's bounding
   rectangle. Output is pixel-identical, overlapping masks included.

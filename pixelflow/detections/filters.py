@@ -656,30 +656,24 @@ def filter_by_first_seen_time(self, start_time: Optional[float] = None, end_time
     Filter detections by when they were first observed.
     
     Args:
-        start_time (Optional[float]): Earliest first seen time (inclusive).
-                                     Time units depend on tracking implementation
-                                     (frames, seconds, timestamps).
+        start_time (Optional[float]): Earliest first seen time (inclusive), in seconds as
+                                     ``TimeTracker`` writes it: from the start of the video
+                                     with ``fps``, a Unix timestamp without it.
         end_time (Optional[float]): Latest first seen time (inclusive).
         
     Returns:
         Detections: New Detections object containing only detections first seen within time range.
     
     Example:
-        >>> # Keep only objects first detected in early frames (0-100)
-        >>> early_objects = detections.filter_by_first_seen_time(start_time=0, end_time=100)
-        >>> 
-        >>> # Focus on objects that appeared recently (after frame 500)
-        >>> recent_objects = detections.filter_by_first_seen_time(start_time=500)
-        >>> 
-        >>> # Analyze objects from specific time window
-        >>> window_objects = detections.filter_by_first_seen_time(
-        ...     start_time=1000.5, end_time=2000.5
-        ... )
+        >>> # With TimeTracker(fps=video.fps): objects that appeared in the first 10 seconds
+        >>> early_objects = detections.filter_by_first_seen_time(end_time=10)
+        >>>
+        >>> # Objects that appeared after the first minute
+        >>> recent_objects = detections.filter_by_first_seen_time(start_time=60)
     
     Notes:
         - Requires first_seen_time field to be populated in Detection objects
         - Detections with None first_seen_time are excluded
-        - Time units depend on tracking system (frames, seconds, etc.)
         - Useful for temporal analysis and event-based filtering
     """
     filtered_detections = self.__class__()

@@ -227,7 +227,8 @@ class Detection:
                                          Defaults to empty list if None.
         line_crossings (Optional[List[Dict]]): Line crossing events for this detection.
                                              Defaults to empty list if None.
-        first_seen_time (Optional[float]): Timestamp when detection first appeared (Unix time).
+        first_seen_time (Optional[float]): When the object first appeared, in seconds: from the
+                                           start of the video, or Unix time (see TimeTracker).
         total_time (float): Total duration since first detection in seconds. Default is 0.0.
     
     Raises:
@@ -314,7 +315,7 @@ class Detection:
         self.zones = zones if zones is not None else []  # List of zone IDs
         self.zone_names = zone_names if zone_names is not None else []  # List of zone names
         self.line_crossings = line_crossings if line_crossings is not None else []  # List of line crossing events
-        self.first_seen_time = first_seen_time  # Timestamp/frame when first detected
+        self.first_seen_time = first_seen_time  # Seconds when first detected (see TimeTracker)
         self.total_time = total_time  # Total time since first detection (in seconds)
 
     @property

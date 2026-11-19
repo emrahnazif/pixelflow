@@ -1009,6 +1009,23 @@ class TestTimer:
             assert det.first_seen_time is not None
             assert det.total_time >= 0.0
 
+    def test_first_seen_time_on_every_frame_in_seconds(self):
+        """With fps, first_seen_time is seconds from the start of the video, on every frame."""
+        timer = pf.TimeTracker(fps=10)
+        timer.update(self._dets([1]))
+        timer.update(self._dets([1]))
+        dets = timer.update(self._dets([1, 2]))
+        assert [d.first_seen_time for d in dets] == [0.0, 0.2]
+        assert [d.total_time for d in dets] == [0.2, 0.0]
+        assert len(dets.filter_by_first_seen_time(start_time=0.1)) == 1
+
+    def test_first_seen_time_is_unix_time_with_the_clock(self):
+        before = time.time()
+        timer = pf.TimeTracker()
+        timer.update(self._dets([1]))
+        dets = timer.update(self._dets([1]))
+        assert before <= dets[0].first_seen_time <= time.time()
+
     def test_total_time_accumulates_across_frames(self):
         """A tracker seen again later reports a larger total_time."""
         timer = pf.TimeTracker()

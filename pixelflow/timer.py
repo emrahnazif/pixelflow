@@ -6,8 +6,8 @@ detection time, zone occupancy duration, and line crossing analysis. Supports bo
 frame-based timing for video processing and real-time clock-based timing for live streams.
 """
 
-from datetime import datetime
-from typing import Dict, List, Optional, Any, Union
+import time
+from typing import Dict, List, Optional, Any
 import numpy as np
 
 
@@ -33,9 +33,10 @@ class TimeTracker:
         fps (Optional[float]): Frame rate used for timing calculations.
         frame_count (int): Current frame number (frame-based timing only).
         use_clock (bool): Whether using system clock (True) or frame-based (False) timing.
-        first_seen (Dict[int, Union[datetime, int]]): First detection time for each tracker ID.
-        zone_times (Dict[tuple, Union[datetime, int]]): Zone entry times keyed by (tracker_id, zone_id).
-        line_cross_times (Dict[tuple, Union[datetime, int]]): Line crossing times keyed by (tracker_id, line_id, direction).
+        first_seen (Dict[int, float]): First detection time for each tracker ID, in seconds
+            (from the start of the video with fps, Unix time without).
+        zone_times (Dict[tuple, float]): Zone entry times keyed by (tracker_id, zone_id), in seconds.
+        line_cross_times (Dict[tuple, float]): Line crossing times keyed by (tracker_id, line_id, direction), in seconds.
     
     Example:
         >>> import cv2
@@ -84,7 +85,6 @@ class TimeTracker:
     Performance Notes:
         - O(n) time complexity where n is number of detections per frame
         - Memory usage grows with unique tracker count and zone/line complexity
-        - Frame-based timing is more CPU efficient than datetime calculations
     """
     
     def __init__(self, fps: Optional[float] = None):
@@ -128,21 +128,22 @@ class TimeTracker:
         self.frame_count = 0
         
         # Overall time tracking - when each tracker was first seen
-        self.first_seen: Dict[int, Union[datetime, int]] = {}
+        self.first_seen: Dict[int, float] = {}
         
         # Zone-specific time tracking - when tracker entered each zone
-        self.zone_times: Dict[tuple, Union[datetime, int]] = {}  # (tracker_id, zone_id) -> start_time
+        self.zone_times: Dict[tuple, float] = {}  # (tracker_id, zone_id) -> start_time
         
         # Line crossing time tracking - when tracker crossed each line
-        self.line_cross_times: Dict[tuple, Union[datetime, int]] = {}  # (tracker_id, line_id, direction) -> time
+        self.line_cross_times: Dict[tuple, float] = {}  # (tracker_id, line_id, direction) -> time
         
         # Set timing mode
         if fps is None:
             self.use_clock = True
-            self.get_current_time = datetime.now
+            self.get_current_time = time.time
         else:
             self.use_clock = False
-            self.get_current_time = lambda: self.frame_count
+            # Seconds from the start of the video: frame 1 is 0.0.
+            self.get_current_time = lambda: (self.frame_count - 1) / self.fps
     
     def update(self, detections):
         """
@@ -159,9 +160,10 @@ class TimeTracker:
         
         Returns:
             Same detections object with updated timing attributes (modified in-place).
-            Each detection gains:
+            Each tracked detection gets, on every frame:
             - total_time (float): Seconds since first detection of this tracker
-            - first_seen_time (Union[datetime, int]): When tracker was first detected
+            - first_seen_time (float): When the tracker was first detected, in seconds:
+              from the start of the video with ``fps``, a Unix timestamp without it
         
         Raises:
             AttributeError: If detections object doesn't support iteration.
@@ -218,7 +220,7 @@ class TimeTracker:
             # Track total time since first detection
             if tid not in self.first_seen:
                 self.first_seen[tid] = current_time
-                detection.first_seen_time = current_time
+            detection.first_seen_time = self.first_seen[tid]
             
             # Update detection with time info
             total_duration = self._calculate_duration(self.first_seen[tid], current_time)
@@ -367,57 +369,13 @@ class TimeTracker:
             'since_line_crossing': line_times_dict
         }
     
-    def _calculate_duration(self, start_time: Union[datetime, int], current_time: Union[datetime, int]) -> float:
+    def _calculate_duration(self, start_time: float, current_time: float) -> float:
+        """Seconds between two recorded times (both in seconds), to the microsecond.
+
+        Rounding drops float noise from subtracting two timestamps (13.6 - 10.48 is
+        3.1199999999999992, not 3.12).
         """
-        Calculate duration between two time points based on timing mode.
-        
-        Handles both clock-based timing (using datetime objects) and frame-based timing
-        (using frame numbers and FPS conversion). Provides consistent duration calculation
-        regardless of timing mode selected during initialization.
-        
-        Args:
-            start_time (Union[datetime, int]): Starting time point. datetime object for
-                                              clock-based timing or frame number for
-                                              frame-based timing.
-            current_time (Union[datetime, int]): Current time point. Must be same type
-                                                as start_time and represent later time.
-        
-        Returns:
-            float: Duration in seconds between start_time and current_time.
-                  Always positive for valid inputs.
-        
-        Raises:
-            TypeError: If start_time and current_time are not compatible types.
-            ZeroDivisionError: If fps is 0 (should not occur with proper initialization).
-        
-        Example:
-            >>> import pixelflow as pf
-            >>> from datetime import datetime, timedelta
-            >>> 
-            >>> # Clock-based timing
-            >>> tracker = pf.timer.TimeTracker()
-            >>> start = datetime.now()
-            >>> end = start + timedelta(seconds=5.5)
-            >>> duration = tracker._calculate_duration(start, end)
-            >>> print(f"Duration: {duration:.1f}s")  # 5.5s
-            >>> 
-            >>> # Frame-based timing
-            >>> tracker = pf.timer.TimeTracker(fps=30.0)
-            >>> start_frame = 100
-            >>> end_frame = 190  # 90 frames later
-            >>> duration = tracker._calculate_duration(start_frame, end_frame)
-            >>> print(f"Duration: {duration:.1f}s")  # 3.0s (90/30)
-        
-        Notes:
-            - Internal method not intended for direct public use
-            - Timing mode consistency enforced by initialization logic
-            - Clock-based timing uses datetime.total_seconds() for precision
-            - Frame-based timing assumes consistent frame rate throughout
-        """
-        if self.use_clock:
-            return (current_time - start_time).total_seconds()
-        else:
-            return (current_time - start_time) / self.fps
+        return round(current_time - start_time, 6)
     
     def reset(self, tracker_ids: Optional[List[int]] = None):
         """
@@ -496,7 +454,7 @@ class TimeTracker:
         Returns:
             Dict[str, Any]: Comprehensive tracker statistics containing:
                 - 'tracker_id' (int): The requested tracker ID
-                - 'first_seen' (Union[datetime, int, None]): When tracker first detected
+                - 'first_seen' (Optional[float]): When tracker first detected, in seconds (as first_seen_time)
                 - 'total_time' (float): Total time in seconds since first detection
                 - 'zones' (Dict[Any, float]): Zone occupancy times by zone_id
                 - 'line_crossings' (Dict[str, float]): Time since crossings by "line_direction"
