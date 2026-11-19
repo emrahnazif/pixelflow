@@ -154,6 +154,24 @@ class TestMaskAndFilledBox:
         drawn = colors_drawn(before, after)
         assert drawn and all(r > g and r > b for r, g, b in drawn)
 
+    def test_overlapping_masks_blend_each_pixel_once_in_the_later_colour(self):
+        """Masks are drawn per bounding rectangle; a pixel two rectangles share must
+        be blended once, from the original frame, in the later detection's colour."""
+        first = np.zeros((240, 320), dtype=bool)
+        first[50:150, 50:150] = True
+        second = np.zeros((240, 320), dtype=bool)
+        second[100:200, 100:200] = True
+        result = detections([[50, 50, 150, 150], [100, 100, 200, 200]], class_ids=[0, 1])
+        result[0].masks = [first]
+        result[1].masks = [second]
+        before = np.full((240, 320, 3), 100, dtype=np.uint8)
+        after = pf.annotate.mask(before.copy(), result, opacity=0.5,
+                                 colors=[(200, 0, 0), (0, 0, 200)])
+        assert tuple(after[120, 120]) == (50, 50, 150)   # shared: second colour, blended once
+        assert tuple(after[60, 60]) == (150, 50, 50)     # first only
+        assert tuple(after[190, 190]) == (50, 50, 150)   # second only
+        assert tuple(after[10, 10]) == (100, 100, 100)   # no mask
+
     def test_mask_without_masks_draws_nothing(self):
         before = canvas()
         after = pf.annotate.mask(before.copy(), detections([BOX]))

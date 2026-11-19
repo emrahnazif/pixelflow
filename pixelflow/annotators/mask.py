@@ -71,63 +71,74 @@ def mask(
         - Supports both binary mask arrays (boolean or uint8) and polygon coordinate lists
         - Binary masks must match frame dimensions exactly
         - Polygon coordinates are automatically converted to binary masks using cv2.fillPoly
-        - Uses single-pass rendering for optimal performance with multiple masks
-        - OpenCV's addWeighted function provides hardware-accelerated blending
+        - Where masks overlap, the later detection's colour is drawn; each pixel is
+          blended once
         - Empty or None mask data is automatically skipped
-        
+
     Performance Notes:
-        - Single overlay creation minimizes memory allocation
-        - Batch blending operation reduces computational overhead
+        - Drawing and blending run inside each mask's bounding rectangle, so the cost
+          follows the area the masks cover, not the frame size times the mask count
         - Direct pixel assignment used for full opacity (opacity=1.0) to bypass blending
-        - Polygon-to-mask conversion cached within the function scope
     """
-    # Create a single overlay for all masks
+    # Every step works inside each mask's bounding rectangle, not the whole frame: an
+    # object usually covers a small part of the frame, and full-frame boolean indexing
+    # per mask was the cost (about 7 ms per mask at 1080p).
+    height, width = frame.shape[:2]
     overlay = np.zeros_like(frame, dtype=np.uint8)
-    has_mask = np.zeros(frame.shape[:2], dtype=bool)
-    
-    # Draw all masks to the overlay in a single pass
+    has_mask = np.zeros((height, width), dtype=bool)
+    rects = []  # (y0, y1, x0, x1) of each drawn mask
+
+    # Draw all masks to the overlay; where masks overlap, the later one's colour wins
     for result in detections:
         if result.masks is None:
             continue
-            
+
         color = _get_color_for_prediction(result, colors)
-        
+
         for mask_data in result.masks:
-            binary_mask = None
-            
+            local = None  # the mask inside its rectangle
+
             if isinstance(mask_data, np.ndarray):
                 # Binary mask format
-                if mask_data.dtype == bool:
-                    if mask_data.shape[:2] != frame.shape[:2]:
-                        raise ValueError(f"Mask dimensions {mask_data.shape[:2]} do not match frame dimensions {frame.shape[:2]}.")
-                    binary_mask = mask_data
-                else:
-                    binary_mask = mask_data.astype(bool)
-                    if binary_mask.shape[:2] != frame.shape[:2]:
-                        raise ValueError(f"Mask dimensions {binary_mask.shape[:2]} do not match frame dimensions {frame.shape[:2]}.")
-            
+                if mask_data.shape[:2] != (height, width):
+                    raise ValueError(f"Mask dimensions {mask_data.shape[:2]} do not match frame dimensions {frame.shape[:2]}.")
+                binary_mask = mask_data if mask_data.dtype == bool else mask_data.astype(bool)
+                x, y, w, h = cv2.boundingRect(np.ascontiguousarray(binary_mask).view(np.uint8))
+                if w and h:
+                    local = binary_mask[y:y + h, x:x + w]
+
             elif isinstance(mask_data, list) and len(mask_data) > 0:
-                # Polygon format - convert to binary mask
-                mask_img = np.zeros(frame.shape[:2], dtype=np.uint8)
+                # Polygon format - rasterise into a canvas the size of its rectangle
                 points = np.array(mask_data, dtype=np.int32)
                 if len(points.shape) == 2 and points.shape[1] == 2:
-                    points = points.reshape((-1, 1, 2))
-                    cv2.fillPoly(mask_img, [points], 1)
-                    binary_mask = mask_img.astype(bool)
-            
-            if binary_mask is not None:
-                # Draw mask to overlay and track which pixels have masks
-                overlay[binary_mask] = color
-                has_mask |= binary_mask
-    
-    # Single blend operation for all masks
-    if has_mask.any():  # Only blend if there are masks
+                    x = int(np.clip(points[:, 0].min(), 0, width))
+                    y = int(np.clip(points[:, 1].min(), 0, height))
+                    w = int(np.clip(points[:, 0].max() + 1, 0, width)) - x
+                    h = int(np.clip(points[:, 1].max() + 1, 0, height)) - y
+                    if w > 0 and h > 0:
+                        canvas = np.zeros((h, w), dtype=np.uint8)
+                        cv2.fillPoly(canvas, [(points - (x, y)).reshape((-1, 1, 2))], 1)
+                        local = canvas.astype(bool)
+
+            if local is not None:
+                overlay[y:y + h, x:x + w][local] = color
+                has_mask[y:y + h, x:x + w] |= local
+                rects.append((y, y + h, x, x + w))
+
+    # Blend rectangle by rectangle. Clearing has_mask after each one keeps a pixel
+    # shared by overlapping rectangles from being blended twice, so every masked pixel
+    # is blended once, from the original frame and the final overlay.
+    for y0, y1, x0, x1 in rects:
+        region = frame[y0:y1, x0:x1]
+        hit = has_mask[y0:y1, x0:x1]
+        if not hit.any():
+            continue
         if opacity >= 1.0:
             # Direct copy for full opacity
-            frame[has_mask] = overlay[has_mask]
+            region[hit] = overlay[y0:y1, x0:x1][hit]
         else:
-            # Use OpenCV's optimized blending for partial opacity
-            blended = cv2.addWeighted(frame, 1 - opacity, overlay, opacity, 0)
-            frame[has_mask] = blended[has_mask]
-    
+            blended = cv2.addWeighted(region, 1 - opacity, overlay[y0:y1, x0:x1], opacity, 0)
+            region[hit] = blended[hit]
+        hit[:] = False
+
     return frame
