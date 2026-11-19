@@ -1,6 +1,9 @@
-# DOCSTRING.md - MkDocs Documentation Standards for PixelFlow
+# Docstring standards for PixelFlow
 
-This file provides comprehensive standards for creating MkDocs-ready documentation in PixelFlow functions and modules.
+How to write the docstrings of PixelFlow's functions, classes and modules. Docstrings are read in
+`help()` and in editors, and the API reference is generated from them (`generate_docs.py` in this
+folder). They describe one function precisely; the guides that explain tasks live in `docs/` and
+follow [docs-guide.md](../../docs-guide.md).
 
 ## Module-Level Documentation
 
@@ -32,7 +35,7 @@ __all__ = ["function1", "function2"]  # Export list for API docs
 
 ## Standard Template for Functions
 
-Use this comprehensive template for complex functions (see Template Selection Guidelines below):
+Use this template for public functions, and leave out the sections that have nothing to say.
 
 ```python
 def function_name(
@@ -62,22 +65,20 @@ def function_name(
         ExceptionType2: [When this exception occurs]
         
     Example:
-        >>> import cv2
         >>> import pixelflow as pf
-        >>> 
+        >>> from mayaku import from_pretrained
+        >>>
         >>> # [Comment describing the setup]
-        >>> image = cv2.imread("path/to/image.jpg")
-        >>> outputs = model.predict(image)  # Raw model outputs
-        >>> results = pf.from_ultralytics(outputs)  # Convert to PixelFlow format
-        >>> 
+        >>> predictor = from_pretrained("mayaku-n-det")
+        >>> image = pf.read_image("street.jpg")  # RGB
+        >>> result = predictor(image[:, :, ::-1])  # Mayaku reads arrays as BGR
+        >>> detections = pf.from_mayaku(result, labels=predictor.class_names)
+        >>>
         >>> # [Comment describing basic usage]
-        >>> result = pf.module.function_name(param1, results)
-        >>> 
-        >>> # [Comment describing advanced usage]
-        >>> result = pf.module.function_name(param1, results, param2=custom_value)
-        >>> 
-        >>> # [Comment describing edge case or alternative usage]
-        >>> result = pf.module.function_name(param1, results, param3=0.2)
+        >>> result = pf.module.function_name(param1, detections)
+        >>>
+        >>> # [Comment describing another option]
+        >>> result = pf.module.function_name(param1, detections, param3=0.2)
     
     Notes:
         - [Implementation detail or behavior note]
@@ -106,14 +107,12 @@ def function_name(
 - Explain what "None" means for optional parameters
 
 ### 2. **Examples Section**
-- **Always show PixelFlow workflow** (for functions using results): `outputs -> pf.from_*() -> function`
-- **Functions Template**: Provide 3-4 examples showing:
-  - Basic usage with defaults
-  - Advanced usage with custom parameters  
-  - Edge case or alternative workflow
-  - Different parameter combinations
-  - Basic usage
-  - Alternative usage (if applicable)
+- **Show the PixelFlow workflow** (for functions taking detections): model output, then
+  `pf.from_*()`, then the function
+- One to three examples: basic usage with defaults, then the options that matter most
+- Every example runs as written: real function names and parameters, no `model` that is never
+  defined, nothing removed from the API
+- Read images with `pf.read_image` (RGB), never `cv2.imread` (BGR)
 - Use realistic variable names and paths
 - Add comments explaining each example's purpose
 
@@ -135,8 +134,8 @@ def function_name(
 - Use format: `function_name : Description`
 - Link to complementary, alternative, or prerequisite functions
 
-### 7. **Implementation Notes**
-- Document in-place modifications
+### 6. **Implementation Notes**
+- Say whether the input is modified in place or a new object is returned
 - Explain automatic adaptations or validations
 - Note any clamping, clipping, or constraint enforcement
 - Explain default parameter selection logic
@@ -144,21 +143,24 @@ def function_name(
 ## PixelFlow-Specific Patterns
 
 ### Framework Adapter Pattern
-Always show the two-step process in examples:
+Always show the two-step process in examples: the model's output, then a `pf.from_*()` converter.
+Use Mayaku unless the function is about another framework (the docstring of `from_ultralytics`
+uses Ultralytics):
 ```python
 >>> import pixelflow as pf
->>> from ultralytics import YOLO # or from detectron2 or transformers or other framework
->>> image = cv2.imread("image.jpg") # or from pillow or other library read image
->>> model = YOLO("yolo11l.pt")
->>> outputs = model.predict(image)  # Raw framework output
->>> results = pf.from_ultralytics(outputs)  # or from_detectron2() or from_transformers() Convert to PixelFlow unified
->>> processed = pf.annotators.function_name(image, results)
+>>> from mayaku import from_pretrained
+>>> predictor = from_pretrained("mayaku-n-det")
+>>> image = pf.read_image("street.jpg")  # RGB
+>>> result = predictor(image[:, :, ::-1])  # Mayaku reads arrays as BGR
+>>> detections = pf.from_mayaku(result, labels=predictor.class_names)
+>>> image = pf.annotate.box(image, detections)
 ```
 
 ### Common Result Types
-- Use `results: List` for detection results with `.bbox` attributes
-- Document expected attributes: "Each result must have a 'bbox' attribute"
-- Mention coordinate format: "(x1, y1, x2, y2) coordinates"
+- Name the type: `detections: Detections`, not `results: List`
+- Document expected attributes: "Each detection must have a `bbox`"
+- Mention the coordinate format: `[x1, y1, x2, y2]` in pixels
+- Images are RGB `uint8` arrays of shape `(height, width, 3)`
 
 ### Parameter Validation
 Document automatic validation behaviors:
@@ -168,7 +170,6 @@ Document automatic validation behaviors:
 
 ## Quality Checklist
 
-### All Functions (Standard & Lightweight)
 - [ ] Module docstring explains purpose and use cases
 - [ ] Function signature has complete type hints
 - [ ] Args section includes types, ranges, and constraints
@@ -176,10 +177,11 @@ Document automatic validation behaviors:
 - [ ] Raises section covers relevant exceptions
 - [ ] No unused imports in typing section
 - [ ] Follows Python 3.10+ compatibility requirements
-- [ ] Examples show PixelFlow workflow (`outputs -> pf.from_*()`) when applicable
-- [ ] 3-4 examples covering different use cases
+- [ ] Examples show the PixelFlow workflow (model output, then `pf.from_*()`) when applicable
+- [ ] Every example runs as written, and reads images with `pf.read_image`
 - [ ] Notes section explains implementation details
 - [ ] Performance notes included if computationally intensive
 - [ ] See Also references related functions if they exist
 
-This flexible approach ensures appropriate documentation depth while maintaining quality standards for all function types.
+Not every section belongs in every docstring: a short helper needs a summary line, `Args` and
+`Returns`.
