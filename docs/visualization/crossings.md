@@ -14,7 +14,7 @@ import pixelflow as pf
 from mayaku import from_pretrained
 
 predictor = from_pretrained("mayaku-n-det")
-tracker = pf.tracker.ByteTracker()
+tracker = pf.tracker.ByteTrack()
 crossings = pf.Crossings()
 crossings.add_crossing(start=(0, 360), end=(1280, 360), name="Middle", color=(255, 160, 0))
 
@@ -31,10 +31,10 @@ with pf.VideoWriter("crowd-crossings.mp4", like=video) as writer:
         writer.write(frame)
 ```
 
-![The last frame of a video of a crowded hall: an orange line across the middle with "in: 9" and "out: 11", and boxes around the people](/docs/assets/annotate-crossings.jpg)
+![The last frame of a video of a crowded hall: an orange line across the middle with "in: 9" and "out: 10", and boxes around the people](/docs/assets/annotate-crossings.jpg)
 
-The image is the last of the 341 frames: over the video, 9 people crossed the line one way and 11
-the other.
+The image is the last of the 341 frames: over the video, 9 objects crossed the line one way (8
+people and a handbag) and 10 the other.
 
 Each line is drawn with a dot at both ends and its counts in the middle. Draw after
 `crossings.update()`, so the counts include the current frame. Counting needs tracker ids, which is
