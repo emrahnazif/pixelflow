@@ -11,7 +11,7 @@ from detectron2 import model_zoo
 from detectron2.engine import DefaultPredictor
 from detectron2.config import get_cfg
 from detectron2.data import MetadataCatalog
-from pixelflow.tracker import ByteTracker
+from pixelflow.tracker import ByteTrack
 from pixelflow.zones import Zones
 from pixelflow.crossings import Crossings
 from pixelflow.detections import from_detectron2
@@ -35,14 +35,7 @@ predictor = DefaultPredictor(cfg)
 metadata = MetadataCatalog.get(cfg.DATASETS.TRAIN[0])
 labels = metadata.get("thing_classes", None)
 
-tracker = ByteTracker(
-    track_activation_threshold=0.25,
-    lost_track_buffer=60,
-    minimum_matching_threshold=0.8,
-    minimum_consecutive_frames=2,
-    second_match_threshold=0.2,
-    assignment_threshold=0.5
-)
+tracker = ByteTrack(lost_track_buffer=60, minimum_iou_threshold=0.2)
 
 zones = Zones()
 crossings = Crossings()
@@ -132,13 +125,13 @@ while True:
     
     # frame = pixelflow.annotate.label(frame, results)
     
-    metrics = tracker.get_metrics()
+    active_tracks = len(tracker.tracked_objects)
     zone_counts = zones.get_zone_counts()
     line_counts = lines.get_line_counts()
     
     info_text = [
         f"FPS: {fps:.1f} | Frame: {frame_count}",
-        f"Active Tracks: {metrics['active_tracks']} | Total: {metrics['total_tracks']}",
+        f"Active Tracks: {active_tracks}",
         f"Detection: {len(results.detections)} objects",
         "",
         "Zone Counts:"

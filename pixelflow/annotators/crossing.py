@@ -249,7 +249,7 @@ def crossings(image: np.ndarray, crossings_manager) -> np.ndarray:
         >>> annotated = pf.annotate.crossings(image, crossings_manager)
         >>> 
         >>> # Alternative workflow with tracking integration
-        >>> tracker = pf.tracker.ByteTracker()
+        >>> tracker = pf.tracker.ByteTrack()
         >>> for frame in frames:
         ...     outputs = yolo_model.predict(frame)
         ...     results = pf.from_ultralytics(outputs)

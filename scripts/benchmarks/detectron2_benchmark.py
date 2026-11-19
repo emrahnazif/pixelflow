@@ -22,7 +22,7 @@ from detectron2.config import get_cfg
 from detectron2.data import MetadataCatalog
 import pixelflow
 from pixelflow.detections import from_detectron2
-from pixelflow.tracker import ByteTracker
+from pixelflow.tracker import ByteTrack
 
 
 class Detectron2Benchmark:
@@ -232,11 +232,7 @@ class Detectron2Benchmark:
             return
         
         # Setup tracker
-        tracker = ByteTracker(
-            track_activation_threshold=0.25,
-            lost_track_buffer=30,
-            minimum_matching_threshold=0.8
-        )
+        tracker = ByteTrack(lost_track_buffer=30, minimum_iou_threshold=0.2)
         
         cap = cv2.VideoCapture(self.video_path)
         if not cap.isOpened():

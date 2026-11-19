@@ -83,7 +83,7 @@ class Crossing:
         >>> 
         >>> # Basic crossing detection setup
         >>> model = YOLO("yolo11n.pt")
-        >>> tracker = pf.tracker.ByteTracker()
+        >>> tracker = pf.tracker.ByteTrack()
         >>> crossing = pf.crossings.Crossing(
         ...     start=(100, 200), 
         ...     end=(500, 200),
@@ -141,7 +141,7 @@ class Crossing:
         
     See Also:
         Crossings : Manager class for multiple crossing instances
-        pf.tracker.ByteTracker : Object tracker providing required tracker IDs
+        pf.tracker.ByteTrack : Object tracker providing required tracker IDs
         pf.strategies : Anchor point strategies for different object types
     """
     
@@ -658,7 +658,7 @@ class Crossing:
             >>> 
             >>> # Setup crossing detection pipeline
             >>> model = YOLO("yolo11n.pt")
-            >>> tracker = pf.tracker.ByteTracker()
+            >>> tracker = pf.tracker.ByteTrack()
             >>> crossing = pf.crossings.Crossing(
             ...     start=(200, 100), 
             ...     end=(200, 400),
@@ -690,7 +690,7 @@ class Crossing:
             ...             print(f"Tracker {detection.tracker_id} crossed {event['line_name']} going {event['direction']}")
         
         Notes:
-            - Requires tracker IDs: Call tracker.update(results) before crossing.trigger(results)
+            - Requires tracker IDs: Use results = tracker.update(results) before crossing.trigger(results)
             - Crossing direction is determined by line orientation: "in" = right to left, "out" = left to right
             - Temporal validation prevents double-counting from object oscillation near the line
             - Objects must be within boundary_margin of line endpoints to trigger crossing detection
@@ -735,7 +735,7 @@ class Crossing:
             warnings.warn(
                 f"Crossing '{self.name}' (ID: {self.line_id}): No detections have tracker_id. "
                 "Crossings require tracker_id for temporal consistency. "
-                "Make sure to call tracker.update(results) before crossings.update(results).",
+                "Make sure to use results = tracker.update(results) before crossings.update(results).",
                 UserWarning,
                 stacklevel=3
             )
@@ -1050,7 +1050,7 @@ class Crossings:
         >>> 
         >>> # Setup multi-crossing detection system
         >>> model = YOLO("yolo11n.pt")
-        >>> tracker = pf.tracker.ByteTracker()
+        >>> tracker = pf.tracker.ByteTrack()
         >>> crossings = pf.crossings.Crossings()
         >>> 
         >>> # Add multiple crossing lines
@@ -1117,7 +1117,7 @@ class Crossings:
         
     See Also:
         Crossing : Individual crossing line detector with temporal validation
-        pf.tracker.ByteTracker : Object tracker providing required tracker IDs
+        pf.tracker.ByteTrack : Object tracker providing required tracker IDs
     """
     
     def __init__(self):
@@ -1403,7 +1403,7 @@ class Crossings:
             >>> 
             >>> # Setup multi-crossing detection system
             >>> model = YOLO("yolo11n.pt")
-            >>> tracker = pf.tracker.ByteTracker()
+            >>> tracker = pf.tracker.ByteTrack()
             >>> crossings = pf.crossings.Crossings()
             >>> crossings.add_crossing(start=(100, 200), end=(500, 200), name="Main Gate")
             >>> crossings.add_crossing(start=(300, 0), end=(300, 400), name="Side Door")
@@ -1439,7 +1439,7 @@ class Crossings:
             >>> crossings.update(vehicle_detections, strategy=[\"center\", \"bottom_center\"])
         
         Notes:
-            - Requires tracker IDs: Call tracker.update(results) before crossings.update(results)
+            - Requires tracker IDs: Use results = tracker.update(results) before crossings.update(results)
             - Modifies Results object in-place by adding line_crossings attribute to detections
             - Each crossing event dict contains: {'line_id', 'line_name', 'direction'}
             - Direction values are 'in' (right to left) or 'out' (left to right)
@@ -1457,7 +1457,7 @@ class Crossings:
         See Also:
             Crossing.trigger : Individual crossing detection method
             get_crossing_counts : Retrieve consolidated crossing analytics
-            pf.tracker.ByteTracker : Required object tracker for temporal consistency
+            pf.tracker.ByteTrack : Required object tracker for temporal consistency
         """        
         # Validate override strategy if provided
         if strategy is not None:

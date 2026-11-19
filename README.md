@@ -15,7 +15,7 @@ from ultralytics import YOLO
 
 model = YOLO("yolo11n.pt")
 video = pf.VideoReader("traffic.mp4")
-tracker = pf.tracker.ByteTracker()
+tracker = pf.tracker.ByteTrack()
 zones = pf.Zones()
 zones.add_zone([(100, 400), (500, 400), (500, 600), (100, 600)], zone_id="entrance")
 
@@ -281,7 +281,7 @@ Built-in ByteTrack for multi-object tracking:
 ```python
 import pixelflow as pf
 
-tracker = pf.tracker.ByteTracker()
+tracker = pf.tracker.ByteTrack()
 
 for frame in video:
     detections = pf.from_ultralytics(model.predict(frame))

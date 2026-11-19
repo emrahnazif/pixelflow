@@ -46,7 +46,7 @@ def smooth(buffer: 'Buffer', temporal_weight_decay: float = 0.8) -> Detections:
     Example:
         >>> import pixelflow as pf
         >>>
-        >>> tracker = pf.tracker.ByteTracker()
+        >>> tracker = pf.tracker.ByteTrack()
         >>> buffer = pf.Buffer(frames=5)  # 2 past + current + 2 future
         >>> for frame in pf.VideoReader("video.mp4"):
         ...     results = tracker.update(model_results(frame))
@@ -104,7 +104,7 @@ def smooth(buffer: 'Buffer', temporal_weight_decay: float = 0.8) -> Detections:
         warnings.warn(
             "No detections have tracker_id. Smoothing matches each detection to "
             "itself across frames, which requires tracking. "
-            "Make sure to call tracker.update(results) before buffering.",
+            "Make sure to use results = tracker.update(results) before buffering.",
             UserWarning,
             stacklevel=2,
         )
