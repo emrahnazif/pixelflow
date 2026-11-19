@@ -22,7 +22,7 @@ from pixelflow.tracker.utils.state_representations import (
 class ByteTrack(BaseTracker):
     """ByteTrack operates online by processing all detector outputs, categorizing them by confidence thresholds to
     enable a two-stage association process. High-score boxes are initially linked to tracklets via Kalman filter
-    predictions and IoU-based Hungarian matching, optionally enhanced with appearance features. Low-score boxes follow
+    predictions and IoU-based Hungarian matching. Low-score boxes follow
     in a secondary matching phase using pure motion similarity to revive occluded tracks. Tracks without matches are
     kept briefly for potential re-association, preventing premature termination. This inclusive approach addresses
     common pitfalls in detection filtering, establishing ByteTrack as a flexible enhancer for existing tracking
@@ -214,10 +214,7 @@ class ByteTrack(BaseTracker):
             maximum_time_without_update=_budget,
         )
 
-        # Every detection is in out_det_indices once; return them in input order.
-        tracker_ids = np.full(len(detections), -1, dtype=int)
-        tracker_ids[out_det_indices] = out_tracker_ids
-        return self._result(detections, tracker_ids)
+        return self._result(detections, out_det_indices, out_tracker_ids)
 
     def _get_associated_indices(
         self,

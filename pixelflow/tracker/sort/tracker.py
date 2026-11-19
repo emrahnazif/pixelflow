@@ -224,7 +224,7 @@ class SORT(BaseTracker):
                 tracker_ids[det_idx] = tracklet.tracker_id
 
         # Return a copy rather than mutating the caller's object.
-        return self._result(detections, tracker_ids)
+        return self._result(detections, range(len(tracker_ids)), tracker_ids)
 
     def reset(self) -> None:
         """Reset tracker state by clearing all tracks and resetting ID counter.

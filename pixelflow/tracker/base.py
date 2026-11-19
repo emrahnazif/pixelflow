@@ -131,18 +131,27 @@ class BaseTracker(ABC):
         return boxes, confidences
 
     @staticmethod
-    def _result(detections: Detections, tracker_ids: np.ndarray | None = None) -> Detections:
-        """Return a copy of ``detections`` with ``tracker_ids`` set, ``-1`` becoming ``None``.
+    def _result(
+        detections: Detections,
+        det_indices: Sequence[int] = (),
+        tracker_ids: Sequence[int] = (),
+    ) -> Detections:
+        """Return a copy of ``detections`` in input order, ``tracker_ids[k]`` set on detection
+        ``det_indices[k]``.
 
-        The input is not modified, and the result keeps its order. Mask arrays are shared
-        with the input rather than copied: the tracker only sets ``tracker_id``, and copying
-        full-image masks every frame cost about 9 ms for 30 masks at 1080p. With no
-        ``tracker_ids``, every detection gets ``None`` (a skipped update).
+        This replaces upstream's ``detections[det_indices]`` (which reorders, and drops the rows
+        a tracker ignores): every input detection comes back, and one that is not listed, or
+        listed with ``-1``, gets ``None``. With no indices (a skipped update), all get ``None``.
+
+        The input is not modified. Mask arrays are shared with the input rather than copied:
+        the tracker only sets ``tracker_id``, and copying full-image masks every frame cost
+        about 9 ms for 30 masks at 1080p.
         """
+        ids = dict(zip((int(i) for i in det_indices), (int(t) for t in tracker_ids)))
         result = Detections()
         for i, detection in enumerate(detections):
             copy = detection.copy(share_masks=True)
-            track_id = -1 if tracker_ids is None else int(tracker_ids[i])
+            track_id = ids.get(i, -1)
             copy.tracker_id = None if track_id == -1 else track_id
             result.add_detection(copy)
         return result
