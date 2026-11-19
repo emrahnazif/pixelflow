@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`shift_masks` cuts a raster mask at the canvas edges** instead of failing (or wrapping) for
+  a negative offset or a mask that runs off the canvas, and rounds a fractional offset.
 - **`TimeTracker` sets `first_seen_time` on every frame, in seconds.** It was set only on an
   object's first frame, so `filter_by_first_seen_time` dropped every object on later frames,
   and it held a frame number (with `fps`) or a `datetime`. It is now seconds from the start of

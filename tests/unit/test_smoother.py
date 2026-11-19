@@ -137,3 +137,14 @@ class TestSmoothing:
         buffer = pf.Buffer(frames=5)
         with pytest.raises(ValueError, match="temporal_weight_decay"):
             pf.smooth(buffer, temporal_weight_decay=2.0)
+
+
+def test_shift_masks_cuts_at_the_canvas_edges():
+    from pixelflow.masks import shift_masks
+    mask = np.zeros((4, 4), dtype=bool)
+    mask[0:2, 0:2] = True
+    left = shift_masks([mask], -1, 0, (4, 4))[0]
+    assert left.shape == (4, 4) and left[0:2, 0].all() and not left[:, 1:].any()
+    off = shift_masks([mask], 3, 3, (4, 4))[0]
+    assert off.sum() == 1 and off[3, 3]
+    assert shift_masks([mask], 9, 9, (4, 4))[0].sum() == 0

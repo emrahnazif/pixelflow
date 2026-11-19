@@ -217,7 +217,9 @@ def shift_masks(masks, dx, dy, canvas_shape=None):
 
     A polygon mask (a list of points) is offset. A raster mask is pasted onto an all-False
     canvas of ``canvas_shape`` (``(height, width)``) with its top-left corner at
-    ``(dx, dy)``; without ``canvas_shape`` it is kept as it is. Anything else is kept as is.
+    ``(dx, dy)`` rounded to whole pixels, cut where it runs past the canvas (offsets may be
+    negative); without
+    ``canvas_shape`` it is kept as it is. Anything else is kept as is.
 
     Used wherever masks made for a part of an image (a slice, a crop) go back onto the
     whole image.
@@ -228,9 +230,15 @@ def shift_masks(masks, dx, dy, canvas_shape=None):
     for mask in masks:
         if isinstance(mask, np.ndarray) and canvas_shape is not None:
             canvas = np.zeros(tuple(canvas_shape[:2]), dtype=mask.dtype)
-            x0, y0 = int(dx), int(dy)
+            x0, y0 = round(dx), round(dy)
             height, width = mask.shape[:2]
-            canvas[y0:y0 + height, x0:x0 + width] = mask
+            # Part of the mask that lands on the canvas, in mask and canvas coordinates.
+            src_x, src_y = max(0, -x0), max(0, -y0)
+            dst_x, dst_y = max(0, x0), max(0, y0)
+            w = min(width - src_x, canvas.shape[1] - dst_x)
+            h = min(height - src_y, canvas.shape[0] - dst_y)
+            if w > 0 and h > 0:
+                canvas[dst_y:dst_y + h, dst_x:dst_x + w] = mask[src_y:src_y + h, src_x:src_x + w]
             shifted.append(canvas)
         elif isinstance(mask, list):
             shifted.append([[x + dx, y + dy] for x, y in mask])
