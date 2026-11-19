@@ -203,6 +203,14 @@ def test_sort_defaults():
     assert tracker.minimum_iou_threshold == 0.3
 
 
+@pytest.mark.parametrize("tracker_class", TRACKERS)
+def test_unknown_frame_rate_means_30(tracker_class):
+    """VideoReader.fps is None when a source reports no rate; frame_rate=video.fps must work."""
+    tracker = tracker_class(frame_rate=None)
+    assert tracker.maximum_frames_without_update == 30
+    assert tracker._frame_rate == 30.0
+
+
 def test_lost_track_buffer_scales_with_frame_rate():
     assert pf.tracker.ByteTrack(lost_track_buffer=30, frame_rate=60).maximum_frames_without_update == 60
     with pytest.raises(ValueError):

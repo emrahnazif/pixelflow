@@ -46,7 +46,7 @@ class OCSORT(BaseTracker):
             first missed frame. Increasing this value enhances occlusion
             handling but may increase ID switching for similar objects.
         frame_rate: `float` specifying video frame rate in frames per second.
-            Must be positive. Used to scale the lost track buffer for consistent
+            Must be positive; `None` means 30. Used to scale the lost track buffer for consistent
             tracking across different frame rates.
         minimum_consecutive_frames: `int` specifying number of consecutive
             frames before a track is considered valid. Before reaching this

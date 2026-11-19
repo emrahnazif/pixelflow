@@ -46,7 +46,7 @@ class BoTSORT(BaseTracker):
             keeping lost tracks alive before deletion. `0` deletes a confirmed
             track on the first missed frame. This is scaled by `frame_rate`.
         frame_rate: Video frame rate used to scale the lost track buffer to
-            time-like behavior. Must be positive.
+            time-like behavior. Must be positive; ``None`` means 30.
         track_activation_threshold: Minimum detection confidence to spawn a new
             track.
         minimum_consecutive_frames: Number of successful updates required before

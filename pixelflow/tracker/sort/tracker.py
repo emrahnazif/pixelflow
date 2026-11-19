@@ -43,7 +43,7 @@ class SORT(BaseTracker):
             first missed frame. Increasing this value enhances occlusion
             handling but may increase ID switching for similar objects.
         frame_rate: `float` specifying video frame rate in frames per second.
-            Must be positive. Used to scale the lost track buffer for consistent
+            Must be positive; `None` means 30. Used to scale the lost track buffer for consistent
             tracking across different frame rates.
         track_activation_threshold: `float` specifying minimum detection
             confidence to create new tracks. Higher values reduce false

@@ -43,6 +43,8 @@ What differs from upstream, all in `base.py` and the `update` methods:
   BoT-SORT and C-BIoU ignore detections with a confidence of 0.1 or less, and upstream drops
   them from the output; here they come back with `tracker_id = None`.
 - Frames passed for camera motion compensation are RGB, PixelFlow's image format (upstream: BGR).
+- `frame_rate=None` counts as 30 (upstream: error), so `frame_rate=video.fps` works when a video
+  or camera reports no rate.
 - An unconfirmed detection has `tracker_id = None` (upstream: `-1`).
 - Tracker IDs start at 1 (upstream: 0).
 - `tracked_objects` returns a `Detections` with `bbox` and `tracker_id` only.

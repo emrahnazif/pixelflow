@@ -50,7 +50,7 @@ class BaseTracker(ABC):
     @staticmethod
     def _compute_maximum_frames_without_update(
         lost_track_buffer: int,
-        frame_rate: float,
+        frame_rate: float | None,
     ) -> int:
         """Scale positive lost-track buffers without changing explicit zero-buffer configs.
 
@@ -83,6 +83,7 @@ class BaseTracker(ABC):
         """
         if lost_track_buffer < 0:
             raise ValueError("lost_track_buffer must be greater than or equal to 0")
+        frame_rate = BaseTracker._frame_rate_or_default(frame_rate)
         if not math.isfinite(frame_rate) or frame_rate <= 0:
             raise ValueError("frame_rate must be a finite positive value")
         if lost_track_buffer == 0:
@@ -95,15 +96,26 @@ class BaseTracker(ABC):
     _frame_rate: float = 1.0
     _last_timestamp: float | None = None
 
-    def _init_timestamp_state(self, frame_rate: float) -> None:
+    @staticmethod
+    def _frame_rate_or_default(frame_rate: float | None) -> float:
+        """Return ``frame_rate``, or 30 when it is ``None``.
+
+        PixelFlow change: ``VideoReader.fps`` and ``CameraStream.fps`` are ``None`` when the
+        source does not report a rate, so ``Tracker(frame_rate=video.fps)`` works for every
+        source.
+        """
+        return 30.0 if frame_rate is None else frame_rate
+
+    def _init_timestamp_state(self, frame_rate: float | None) -> None:
         """Register reference FPS and reset timestamp bookkeeping.
 
         Call from ``__init__`` on all concrete trackers.
 
         Args:
-            frame_rate: Reference frames per second for bootstrap elapsed time.
+            frame_rate: Reference frames per second for bootstrap elapsed time
+                (``None`` means 30).
         """
-        self._frame_rate = frame_rate
+        self._frame_rate = self._frame_rate_or_default(frame_rate)
         self._last_timestamp = None
 
     @staticmethod

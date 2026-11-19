@@ -28,7 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   motion: pass the RGB frame as `update(detections, frame=frame)`, or a known 2x3 transform as
   `cmc_transform=`. C-BIoU matches with buffered (enlarged) boxes, for fast or irregular motion.
   All give the same tracker IDs as upstream on MOT17. Upstream's optional ReID (appearance)
-  matching for BoT-SORT is not ported.
+  matching for BoT-SORT is not ported. Unlike upstream, `frame_rate=None` (a video that reports
+  no rate) counts as 30.
 
 ### Fixed
 

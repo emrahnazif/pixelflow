@@ -44,7 +44,7 @@ class CBIoU(BoTSORT):
     Args:
         lost_track_buffer: Time buffer (in frames at 30 FPS) for keeping lost
             tracks alive before deletion. Scaled by ``frame_rate``.
-        frame_rate: Video frame rate used to scale the lost track buffer.
+        frame_rate: Video frame rate used to scale the lost track buffer (``None`` means 30).
         track_activation_threshold: Minimum detection confidence to spawn a
             new track.
         minimum_consecutive_frames: Number of successful updates required
