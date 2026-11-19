@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **License: PixelFlow is now licensed under the Apache License 2.0** (was MIT). Releases up
+  to 0.7.0 remain available under MIT.
+
 ### Fixed
 
 - **`from_mayaku` reads what a Mayaku predictor returns today**: a `Detections` with

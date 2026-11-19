@@ -3,7 +3,7 @@
 [![PyPI version](https://badge.fury.io/py/pixelflow.svg)](https://badge.fury.io/py/pixelflow)
 [![CI](https://github.com/emrahnazif/pixelflow/actions/workflows/ci.yml/badge.svg)](https://github.com/emrahnazif/pixelflow/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 **The computer vision library that gets out of your way.**
 
@@ -441,7 +441,8 @@ Contributions welcome! Please read our contributing guidelines.
 
 ## License
 
-MIT License - see LICENSE file for details.
+Apache License 2.0 - see [LICENSE](LICENSE) and [NOTICE](NOTICE). Releases up to 0.7.0 were
+published under the MIT License.
 
 ---
 
