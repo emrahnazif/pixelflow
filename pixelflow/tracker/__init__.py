@@ -1,7 +1,8 @@
 """Multi-object trackers: give each object the same ``tracker_id`` from frame to frame.
 
-``ByteTrack`` and ``SORT`` are ported from roboflow/trackers (Apache-2.0); see
-``pixelflow/tracker/UPSTREAM.md`` for the commit and what changed.
+``SORT``, ``ByteTrack``, ``OCSORT``, ``BoTSORT`` and ``CBIoU`` are ported from
+roboflow/trackers (Apache-2.0); see ``pixelflow/tracker/UPSTREAM.md`` for the commit
+and what changed.
 
 Example:
     >>> import pixelflow as pf
@@ -13,6 +14,7 @@ Example:
 from pixelflow.tracker.base import BaseTracker
 from pixelflow.tracker.botsort.tracker import BoTSORT
 from pixelflow.tracker.bytetrack.tracker import ByteTrack
+from pixelflow.tracker.cbiou.tracker import CBIoU
 from pixelflow.tracker.ocsort.tracker import OCSORT
 from pixelflow.tracker.sort.tracker import SORT
 from pixelflow.tracker.utils.iou import BIoU, BaseIoU, CIoU, DIoU, GIoU, IoU
@@ -29,6 +31,7 @@ __all__ = [
     "SORT",
     "OCSORT",
     "BoTSORT",
+    "CBIoU",
     "BaseIoU",
     "IoU",
     "BIoU",
