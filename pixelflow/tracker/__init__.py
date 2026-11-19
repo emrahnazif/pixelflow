@@ -1,19 +1,36 @@
-"""
-PixelFlow Tracker Module
+"""Multi-object trackers: give each object the same ``tracker_id`` from frame to frame.
 
-This module provides multi-object tracking capabilities for computer vision applications.
-Currently implements ByteTrack algorithm for robust object tracking across video frames.
+``ByteTrack`` and ``SORT`` are ported from roboflow/trackers (Apache-2.0); see
+``pixelflow/tracker/UPSTREAM.md`` for the commit and what changed.
+
+Example:
+    >>> import pixelflow as pf
+    >>> tracker = pf.tracker.ByteTrack()
+    >>> for detections in per_frame_detections:  # doctest: +SKIP
+    ...     detections = tracker.update(detections)
 """
 
-from .bytetrack import ByteTracker
-from .track import STrack, TrackState
-from .kalman_filter import KalmanFilter
-from . import matching
+from pixelflow.tracker.base import BaseTracker
+from pixelflow.tracker.bytetrack.tracker import ByteTrack
+from pixelflow.tracker.sort.tracker import SORT
+from pixelflow.tracker.utils.iou import BIoU, BaseIoU, CIoU, DIoU, GIoU, IoU
+from pixelflow.tracker.utils.state_representations import (
+    BaseStateEstimator,
+    XCYCSRStateEstimator,
+    XYXYStateEstimator,
+)
 
 __all__ = [
-    'ByteTracker',
-    'STrack', 
-    'TrackState',
-    'KalmanFilter',
-    'matching'
+    "BaseTracker",
+    "ByteTrack",
+    "SORT",
+    "BaseIoU",
+    "IoU",
+    "BIoU",
+    "GIoU",
+    "DIoU",
+    "CIoU",
+    "BaseStateEstimator",
+    "XYXYStateEstimator",
+    "XCYCSRStateEstimator",
 ]

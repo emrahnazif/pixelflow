@@ -1,2 +1,7 @@
 PixelFlow
 Copyright 2025-2026 Emrah Nazif
+
+This product includes software developed by Roboflow:
+roboflow/trackers (https://github.com/roboflow/trackers), Copyright (c) 2026 Roboflow,
+licensed under the Apache License, Version 2.0. The ByteTrack and SORT trackers in
+pixelflow/tracker/ are ported from it and modified; see pixelflow/tracker/UPSTREAM.md.

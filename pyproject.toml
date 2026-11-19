@@ -68,3 +68,7 @@ version = {attr = "pixelflow.__version__"}
 [tool.setuptools.packages.find]
 include = ["pixelflow*"]
 exclude = ["tests*", "docs*", "examples*", "scripts*"]
+
+[tool.setuptools.package-data]
+# Provenance of the tracker ported from roboflow/trackers (LICENSE and NOTICE ship in dist-info).
+"pixelflow.tracker" = ["UPSTREAM.md"]

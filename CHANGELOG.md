@@ -9,8 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **License: PixelFlow is now licensed under the Apache License 2.0** (was MIT). Releases up
-  to 0.7.0 remain available under MIT.
+- **License: PixelFlow is now licensed under the Apache License 2.0** (was MIT), the license
+  of the tracker code ported from roboflow/trackers, so the whole package has one license.
+  `NOTICE` credits that code. Releases up to 0.7.0 remain available under MIT.
+
+- **New trackers: `pf.tracker.ByteTrack` and `pf.tracker.SORT`, ported from
+  [roboflow/trackers](https://github.com/roboflow/trackers) (Apache-2.0).** They replace
+  `pf.tracker.ByteTracker`. The port takes and returns PixelFlow `Detections` and gives
+  the same tracker IDs as upstream on the MOT17 validation detections. `update` now
+  returns a copy in the input's order and leaves the input unchanged; unconfirmed
+  detections have `tracker_id = None`; IDs start at 1. Both accept an optional
+  `timestamp` for variable frame rates, and `tracked_objects` lists every live track
+  with its predicted box. ByteTrack's defaults change: a new track needs a confidence of
+  0.7 (was 0.25) and 2 frames (was 3). Provenance and changes:
+  `pixelflow/tracker/UPSTREAM.md`.
 
 ### Fixed
 
@@ -61,6 +73,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`pf.tracker.ByteTracker`**, with `STrack`, `TrackState`, `KalmanFilter`, `matching` and
+  `get_metrics()`. Use `pf.tracker.ByteTrack`; its parameters are `track_activation_threshold`,
+  `lost_track_buffer`, `frame_rate`, `minimum_consecutive_frames`, `minimum_iou_threshold`
+  and `high_conf_det_threshold`. A new track needs a confidence of at least both
+  `track_activation_threshold` and `high_conf_det_threshold`.
 - **`from_datamarkin`.** The Datamarkin API converter is gone, along with its tests and
   its rows in the README and documentation guide. Code that called it should build
   `Detection` objects directly, or use `Detections.from_dict` if the data is already in

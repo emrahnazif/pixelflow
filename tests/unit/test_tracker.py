@@ -1,23 +1,25 @@
 """
 Unit and scenario tests for pixelflow.tracker.
 
-The unit tests pin the three pieces the tracker is built from -- the Kalman
-filter, the association maths, and the track state machine. The scenario tests
-matter more: a multi-object tracker can pass every unit test and still switch
-identities the moment two objects cross, so the second half of this file drives
-whole sequences through `ByteTracker` and asserts on the identities that come
-out the other end.
+ByteTrack and SORT are ported from roboflow/trackers. Their tracking output was
+checked against upstream on the MOT17 validation detections (identical IDs on
+every frame); these tests pin what the port adds -- PixelFlow Detections in and
+out -- and the behaviour that matters to users, on synthetic sequences: a
+tracker can pass every unit test and still switch identities the moment two
+objects cross.
 
 Scenarios use synthetic boxes rather than a real sequence, which keeps them
-deterministic and fast at the cost of realism. They are a regression net, not a
-benchmark: MOTA/HOTA numbers need real footage.
+deterministic and fast. They are a regression net, not a benchmark.
 """
 
 import numpy as np
 import pytest
 
 import pixelflow as pf
-from pixelflow.tracker import KalmanFilter, STrack, TrackState, matching
+from pixelflow.tracker.utils.iou import box_iou_batch
+from tests.helpers import make_detections as detections_of
+
+TRACKERS = [pf.tracker.ByteTrack, pf.tracker.SORT]
 
 
 # ============================================================================
@@ -38,10 +40,7 @@ def track_sequence(tracker, frames, scores=None):
     """Drive `frames` through `tracker`, returning the tracker_ids seen per frame."""
     seen = []
     for i, boxes in enumerate(frames):
-        boxes = np.asarray(boxes, dtype=float).reshape(-1, 4)
-        frame_scores = scores[i] if scores is not None else [0.9] * len(boxes)
-        detections = pf.from_arrays(boxes, scores=frame_scores,
-                                    class_ids=[0] * len(boxes))
+        detections = detections_of(boxes, scores[i] if scores is not None else None)
         seen.append([d.tracker_id for d in tracker.update(detections)])
     return seen
 
@@ -52,348 +51,252 @@ def assigned(frame_ids):
 
 
 # ============================================================================
-# KalmanFilter
+# IoU
 # ============================================================================
 
-class TestKalmanFilter:
-    """The constant-velocity model every track carries."""
+class TestBoxIoU:
 
-    def test_initiate_shapes_and_position(self):
-        """A new track starts at the measurement with zero velocity."""
-        kf = KalmanFilter()
-        mean, cov = kf.initiate(np.array([100.0, 200.0, 0.5, 80.0]))
-        assert mean.shape == (8,)
-        assert cov.shape == (8, 8)
-        np.testing.assert_allclose(mean[:4], [100.0, 200.0, 0.5, 80.0])
-        np.testing.assert_allclose(mean[4:], 0.0)
+    def test_values(self):
+        a = np.array([[100, 100, 200, 200], [300, 300, 400, 400]], dtype=float)
+        b = np.array([[150, 150, 250, 250], [320, 320, 420, 420]], dtype=float)
+        iou = box_iou_batch(a, b)
+        assert iou.dtype == np.float32
+        np.testing.assert_allclose(iou, [[2500 / 17500, 0], [0, 6400 / 13600]], rtol=1e-6)
 
-    def test_predict_advances_by_velocity(self):
-        """Position moves by velocity; a stationary track stays put."""
-        kf = KalmanFilter()
-        mean, cov = kf.initiate(np.array([100.0, 200.0, 0.5, 80.0]))
-        mean[4:6] = [10.0, -5.0]  # vx, vy
-        moved, _ = kf.predict(mean, cov)
-        assert moved[0] == pytest.approx(110.0)
-        assert moved[1] == pytest.approx(195.0)
-
-    def test_predict_grows_uncertainty(self):
-        """Predicting without a measurement makes the estimate less certain."""
-        kf = KalmanFilter()
-        mean, cov = kf.initiate(np.array([100.0, 200.0, 0.5, 80.0]))
-        _, predicted_cov = kf.predict(mean, cov)
-        assert np.trace(predicted_cov) > np.trace(cov)
-
-    def test_update_pulls_toward_measurement(self):
-        """Correcting with an observation moves the estimate toward it."""
-        kf = KalmanFilter()
-        mean, cov = kf.initiate(np.array([100.0, 200.0, 0.5, 80.0]))
-        mean, cov = kf.predict(mean, cov)
-        observation = np.array([150.0, 200.0, 0.5, 80.0])
-        corrected, corrected_cov = kf.update(mean, cov, observation)
-        assert mean[0] < corrected[0] <= observation[0]
-        assert np.trace(corrected_cov) < np.trace(cov)
-
-    def test_project_returns_measurement_space(self):
-        """Projection drops the velocity half of the state."""
-        kf = KalmanFilter()
-        mean, cov = kf.initiate(np.array([100.0, 200.0, 0.5, 80.0]))
-        projected_mean, projected_cov = kf.project(mean, cov)
-        assert projected_mean.shape == (4,)
-        assert projected_cov.shape == (4, 4)
-
-    def test_gating_distance_ranks_by_closeness(self):
-        """A measurement near the prediction gates closer than a far one."""
-        kf = KalmanFilter()
-        mean, cov = kf.initiate(np.array([100.0, 200.0, 0.5, 80.0]))
-        distances = kf.gating_distance(
-            mean, cov, np.array([[101.0, 201.0, 0.5, 80.0],
-                                 [900.0, 900.0, 0.5, 80.0]]))
-        assert distances.shape == (2,)
-        assert distances[0] < distances[1]
+    def test_empty_union_is_zero(self):
+        point = np.array([[5, 5, 5, 5]], dtype=float)
+        assert box_iou_batch(point, point)[0, 0] == 0
 
 
 # ============================================================================
-# Association maths
+# PixelFlow Detections in and out
 # ============================================================================
 
-class TestMatching:
-    """IoU, cost matrices and the assignment step."""
+@pytest.mark.parametrize("tracker_class", TRACKERS)
+class TestDetectionsAdapter:
 
-    def test_iou_identical_boxes(self):
-        """A box fully overlaps itself."""
-        b = np.array([[0.0, 0.0, 10.0, 10.0]])
-        assert matching.box_iou_batch(b, b)[0, 0] == pytest.approx(1.0)
+    def test_input_is_not_modified(self, tracker_class):
+        tracker = tracker_class(minimum_consecutive_frames=1)
+        detections = detections_of([box(0, 0)])
+        for _ in range(3):
+            result = tracker.update(detections)
+        assert result[0].tracker_id == 1
+        assert detections[0].tracker_id is None
+        assert result is not detections
 
-    def test_iou_disjoint_boxes(self):
-        """Boxes that do not touch score zero."""
-        a = np.array([[0.0, 0.0, 10.0, 10.0]])
-        b = np.array([[100.0, 100.0, 110.0, 110.0]])
-        assert matching.box_iou_batch(a, b)[0, 0] == pytest.approx(0.0)
+    def test_order_and_fields_are_kept(self, tracker_class):
+        tracker = tracker_class(minimum_consecutive_frames=1, track_activation_threshold=0.1)
+        boxes = [box(0, 0), box(200, 0), box(400, 0)]
+        for _ in range(3):
+            detections = detections_of(boxes, scores=[0.9, 0.2, 0.8])
+            detections[1].class_name = "middle"
+            result = tracker.update(detections)
+        assert [d.bbox for d in result] == [d.bbox for d in detections]
+        assert result[1].class_name == "middle"
+        assert [d.confidence for d in result] == [0.9, 0.2, 0.8]
 
-    def test_iou_partial_overlap_exact_value(self):
-        """A known overlap: 25 intersection over 175 union."""
-        a = np.array([[0.0, 0.0, 10.0, 10.0]])
-        b = np.array([[5.0, 5.0, 15.0, 15.0]])
-        assert matching.box_iou_batch(a, b)[0, 0] == pytest.approx(25.0 / 175.0)
+    def test_masks_are_shared_not_copied(self, tracker_class):
+        mask = np.zeros((100, 100), dtype=bool)
+        detections = pf.Detections()
+        detections.add_detection(pf.Detection(bbox=box(0, 0), confidence=0.9, masks=[mask]))
+        result = tracker_class().update(detections)
+        assert result[0].masks[0] is mask
+        assert result[0].masks is not detections[0].masks
 
-    def test_iou_matrix_shape(self):
-        """Every box in a is scored against every box in b."""
-        a = np.array([[0.0, 0.0, 10.0, 10.0], [20.0, 20.0, 30.0, 30.0]])
-        b = np.array([[0.0, 0.0, 10.0, 10.0]])
-        assert matching.box_iou_batch(a, b).shape == (2, 1)
+    def test_ids_start_at_one(self, tracker_class):
+        tracker = tracker_class(minimum_consecutive_frames=1)
+        ids = track_sequence(tracker, [[box(0, 0), box(200, 0)]] * 3)
+        assert assigned(ids[-1]) == {1, 2}
 
-    def test_linear_assignment_pairs_the_obvious_match(self):
-        """Two tracks and two detections, one clearly cheaper pairing each."""
-        cost = np.array([[0.05, 0.9], [0.9, 0.05]])
-        matches, unmatched_a, unmatched_b = matching.linear_assignment(cost, thresh=0.5)
-        assert sorted(map(tuple, matches)) == [(0, 0), (1, 1)]
-        assert len(unmatched_a) == 0 and len(unmatched_b) == 0
+    def test_unconfirmed_is_none(self, tracker_class):
+        tracker = tracker_class(minimum_consecutive_frames=3)
+        ids = track_sequence(tracker, [[box(0, 0)]])
+        assert ids == [[None]]
 
-    def test_linear_assignment_rejects_costly_pairs(self):
-        """A pairing above the threshold is left unmatched rather than forced."""
-        cost = np.array([[0.99]])
-        matches, unmatched_a, unmatched_b = matching.linear_assignment(cost, thresh=0.5)
-        assert len(matches) == 0
-        assert list(unmatched_a) == [0] and list(unmatched_b) == [0]
+    def test_missing_confidence_counts_as_one(self, tracker_class):
+        tracker = tracker_class(minimum_consecutive_frames=1)
+        detections = pf.Detections()
+        detections.add_detection(pf.Detection(bbox=box(0, 0)))
+        for _ in range(3):
+            result = tracker.update(detections)
+        assert result[0].tracker_id == 1
 
-    def test_linear_assignment_handles_empty(self):
-        """No tracks or no detections is not an error."""
-        matches, unmatched_a, unmatched_b = matching.linear_assignment(
-            np.empty((0, 0)), thresh=0.5)
-        assert len(matches) == 0
+    def test_rejects_other_types(self, tracker_class):
+        with pytest.raises(TypeError, match="Detections"):
+            tracker_class().update(np.array([box(0, 0)]))
 
-    def test_iou_distance_is_one_minus_iou(self):
-        """Distance and overlap are complements, so identical boxes cost nothing."""
-        tracks = [STrack(np.array([0.0, 0.0, 10.0, 10.0]), 0.9, 0)]
-        assert matching.iou_distance(tracks, tracks)[0, 0] == pytest.approx(0.0, abs=1e-6)
+    def test_rejects_detection_without_box(self, tracker_class):
+        detections = pf.Detections()
+        detections.detections.append(pf.Detection(class_id=0, confidence=0.9))
+        with pytest.raises(ValueError, match="bbox"):
+            tracker_class().update(detections)
 
+    def test_empty_detections(self, tracker_class):
+        tracker = tracker_class()
+        assert len(tracker.update(pf.Detections())) == 0
+        track_sequence(tracker, [[box(0, 0)]] * 4)
+        assert len(tracker.update(pf.Detections())) == 0
 
-# ============================================================================
-# Track state machine
-# ============================================================================
+    def test_tracked_objects_include_missed_tracks(self, tracker_class):
+        tracker = tracker_class(minimum_consecutive_frames=1)
+        track_sequence(tracker, [[b] for b in moving(0, 100, 5, 5)])
+        tracker.update(pf.Detections())
+        objects = tracker.tracked_objects
+        assert [d.tracker_id for d in objects] == [1]
+        assert objects[0].confidence is None
+        assert objects[0].bbox[0] > 20  # predicted past the last box at x=20
 
-class TestSTrack:
-    """One track's coordinate conversions and lifecycle."""
-
-    def test_coordinate_round_trip(self):
-        """tlwh -> tlbr -> tlwh returns the original box."""
-        tlwh = np.array([10.0, 20.0, 30.0, 40.0])
-        np.testing.assert_allclose(STrack.tlbr_to_tlwh(STrack.tlwh_to_tlbr(tlwh)), tlwh)
-
-    def test_tlwh_to_xyah(self):
-        """The Kalman state is centre x, centre y, aspect ratio, height."""
-        np.testing.assert_allclose(
-            STrack.tlwh_to_xyah(np.array([10.0, 20.0, 30.0, 60.0])),
-            [25.0, 50.0, 0.5, 60.0])
-
-    def test_new_track_starts_unconfirmed(self):
-        """A track is NEW until it is activated."""
-        assert STrack(np.array([0.0, 0.0, 10.0, 10.0]), 0.9, 0).state == TrackState.NEW
-
-    def test_activate_marks_tracked_and_assigns_id(self):
-        """Activation gives the track its identity."""
-        track = STrack(np.array([0.0, 0.0, 10.0, 10.0]), 0.9, 0)
-        track.activate(KalmanFilter(), frame_id=1, track_id=7)
-        assert track.track_id == 7
-        assert track.state == TrackState.TRACKED
-
-    def test_mark_lost_and_removed(self):
-        """A track that stops matching goes lost, then removed."""
-        track = STrack(np.array([0.0, 0.0, 10.0, 10.0]), 0.9, 0)
-        track.activate(KalmanFilter(), frame_id=1, track_id=1)
-        track.mark_lost()
-        assert track.state == TrackState.LOST
-        track.mark_removed()
-        assert track.state == TrackState.REMOVED
-
-
-# ============================================================================
-# ByteTracker basics
-# ============================================================================
-
-class TestByteTrackerBasics:
-    """Construction, resetting and degenerate input."""
-
-    def test_defaults(self):
-        """The documented defaults are what the constructor actually uses."""
-        tracker = pf.tracker.ByteTracker()
-        assert tracker.track_activation_threshold == 0.25
-        assert tracker.max_time_lost == 30
-        assert tracker.minimum_consecutive_frames == 3
-
-    def test_empty_detections_do_not_raise(self):
-        """A frame with nothing in it is normal, not an error."""
-        tracker = pf.tracker.ByteTracker()
-        out = tracker.update(pf.from_arrays(np.empty((0, 4)), scores=[], class_ids=[]))
-        assert len(out) == 0
-
-    def test_many_empty_frames_do_not_raise(self):
-        """A tracker that has never seen anything keeps working."""
-        tracker = pf.tracker.ByteTracker()
-        for _ in range(5):
-            tracker.update(pf.from_arrays(np.empty((0, 4)), scores=[], class_ids=[]))
-        assert len(track_sequence(tracker, [[box(0, 0)]])[0]) == 1
-
-    def test_reset_clears_identities(self):
-        """After a reset the next object starts from the first id again."""
-        tracker = pf.tracker.ByteTracker()
-        track_sequence(tracker, moving(0, 0, 10, 8))
-        first_run_id = max(assigned(track_sequence(tracker, [[box(80, 0)]])[0]), default=None)
+    def test_reset_restarts_ids(self, tracker_class):
+        tracker = tracker_class(minimum_consecutive_frames=1)
+        track_sequence(tracker, [[box(0, 0), box(200, 0)]] * 3)
         tracker.reset()
-        second_run = track_sequence(tracker, moving(0, 0, 10, 8))
-        assert first_run_id is not None
-        assert max(assigned(second_run[-1])) == 1
+        ids = track_sequence(tracker, [[box(400, 400)]] * 3)
+        assert assigned(ids[-1]) == {1}
 
-    def test_metrics_report_frames_and_tracks(self):
-        """The metrics counter follows what the tracker actually did."""
-        tracker = pf.tracker.ByteTracker()
-        track_sequence(tracker, moving(0, 0, 10, 10))
-        metrics = tracker.get_metrics()
-        assert metrics["total_frames"] == 10
-        assert metrics["total_tracks"] >= 1
+    def test_frame_is_ignored_with_a_warning(self, tracker_class):
+        with pytest.warns(UserWarning, match="frame"):
+            tracker_class().update(detections_of([box(0, 0)]), frame=np.zeros((10, 10, 3), np.uint8))
 
-    def test_detection_count_is_preserved(self):
-        """Tracking assigns identities; it never adds or drops detections."""
-        tracker = pf.tracker.ByteTracker()
-        for frame_ids in track_sequence(tracker, [[box(0, 0), box(200, 200)]] * 6):
-            assert len(frame_ids) == 2
+    def test_backwards_timestamp_skips_the_update(self, tracker_class):
+        tracker = tracker_class(minimum_consecutive_frames=1)
+        for i in range(3):
+            tracker.update(detections_of([box(0, 0)]), timestamp=i / 30)
+        with pytest.warns(UserWarning, match="earlier"):
+            result = tracker.update(detections_of([box(0, 0)]), timestamp=0.0)
+        assert result[0].tracker_id is None
+        result = tracker.update(detections_of([box(0, 0)]), timestamp=3 / 30)
+        assert result[0].tracker_id == 1
+
+    def test_timestamp_gap_extrapolates_further(self, tracker_class):
+        """A frame that arrives late is matched where the object is by then."""
+        tracker = tracker_class(minimum_consecutive_frames=1)
+        for i in range(6):
+            tracker.update(detections_of([box(10 * i, 0)]), timestamp=i / 30)
+        # 4 frames' time later, the object moved 40 px: still the same track.
+        result = tracker.update(detections_of([box(90, 0)]), timestamp=9 / 30)
+        assert result[0].tracker_id == 1
+
+
+def test_bytetrack_defaults():
+    tracker = pf.tracker.ByteTrack()
+    assert tracker.track_activation_threshold == 0.7
+    assert tracker.high_conf_det_threshold == 0.6
+    assert tracker.minimum_consecutive_frames == 2
+    assert tracker.maximum_frames_without_update == 30
+
+
+def test_sort_defaults():
+    tracker = pf.tracker.SORT()
+    assert tracker.track_activation_threshold == 0.25
+    assert tracker.minimum_consecutive_frames == 3
+    assert tracker.minimum_iou_threshold == 0.3
+
+
+def test_lost_track_buffer_scales_with_frame_rate():
+    assert pf.tracker.ByteTrack(lost_track_buffer=30, frame_rate=60).maximum_frames_without_update == 60
+    with pytest.raises(ValueError):
+        pf.tracker.SORT(lost_track_buffer=-1)
 
 
 # ============================================================================
 # Scenarios -- the behaviour that actually matters
 # ============================================================================
 
+@pytest.mark.parametrize("tracker_class", TRACKERS)
 class TestTrackingScenarios:
     """Whole sequences, asserting on identity rather than internals."""
 
-    def test_single_object_keeps_one_id(self):
-        """Linear motion is the easiest case and must be rock solid."""
-        tracker = pf.tracker.ByteTracker()
-        frames = track_sequence(tracker, moving(0, 100, 8, 20))
-        settled = [assigned(f) for f in frames[5:]]
+    def test_single_object_keeps_one_id(self, tracker_class):
+        seen = track_sequence(tracker_class(), [[b] for b in moving(0, 100, 8, 20)])
+        settled = [assigned(f) for f in seen[5:]]
         assert all(s == settled[0] for s in settled)
         assert len(settled[0]) == 1
 
-    def test_two_objects_get_distinct_ids(self):
-        """Separate objects are never conflated."""
-        tracker = pf.tracker.ByteTracker()
+    def test_two_objects_get_distinct_ids(self, tracker_class):
         left = moving(0, 100, 8, 20)
         right = moving(400, 300, -8, 20)
-        frames = track_sequence(tracker, [[l[0], r[0]] for l, r in
-                                          zip([[b] for b in left], [[b] for b in right])])
-        assert len(assigned(frames[-1])) == 2
+        seen = track_sequence(tracker_class(), [[l, r] for l, r in zip(left, right)])
+        assert len(assigned(seen[-1])) == 2
 
-    def test_short_occlusion_preserves_identity(self):
+    def test_short_occlusion_preserves_identity(self, tracker_class):
         """A gap well inside lost_track_buffer must not mint a new id."""
-        tracker = pf.tracker.ByteTracker()
         frames = [[b] for b in moving(0, 100, 10, 10)]
         frames += [[]] * 5
         frames += [[b] for b in moving(150, 100, 10, 10)]
-        seen = track_sequence(tracker, frames)
-        before = assigned(seen[8])
-        after = assigned(seen[-1])
+        seen = track_sequence(tracker_class(), frames)
+        before, after = assigned(seen[8]), assigned(seen[-1])
         assert before and after
         assert before == after
 
-    def test_long_occlusion_starts_a_new_track(self):
-        """Past the buffer the track is gone, and honesty beats a stale id."""
-        tracker = pf.tracker.ByteTracker(lost_track_buffer=5)
+    def test_long_occlusion_starts_a_new_track(self, tracker_class):
+        """Past the buffer the track is gone, and a fresh id beats a stale one."""
         frames = [[b] for b in moving(0, 100, 10, 10)]
         frames += [[]] * 15
         frames += [[b] for b in moving(500, 100, 10, 10)]
-        seen = track_sequence(tracker, frames)
-        before = assigned(seen[8])
-        after = assigned(seen[-1])
+        seen = track_sequence(tracker_class(lost_track_buffer=5), frames)
+        before, after = assigned(seen[8]), assigned(seen[-1])
         assert before and after
         assert before != after
 
-    def test_crossing_objects_do_not_swap_ids(self):
+    def test_crossing_objects_do_not_swap_ids(self, tracker_class):
         """Two objects passing through each other is the classic switch case."""
-        tracker = pf.tracker.ByteTracker()
         frames = [[box(10 + 12 * i, 100), box(290 - 12 * i, 100)] for i in range(24)]
-        seen = track_sequence(tracker, frames)
-        settled = [assigned(f) for f in seen[5:]]
-        assert all(s == settled[0] for s in settled), "identity set changed across the crossing"
-        assert len(settled[0]) == 2
+        seen = track_sequence(tracker_class(), frames)
+        first = dict(zip(("left", "right"), seen[5]))
+        last = dict(zip(("left", "right"), seen[-1]))
+        assert None not in first.values()
+        assert first == last
 
-    @pytest.mark.parametrize("step,expected", [
-        (5, 1), (10, 1), (15, 1), (20, 1), (25, 1), (30, 1),
-    ])
-    def test_tracks_up_to_the_association_limit(self, step, expected):
-        """Association is IoU-only, so it holds while boxes still overlap frame to frame.
+    @pytest.mark.parametrize("step", [5, 10, 20])
+    def test_tracks_while_boxes_overlap(self, tracker_class, step):
+        """Association is IoU-only, so it holds while boxes overlap enough frame to frame.
 
-        Documents the working envelope for a 50px box: everything here overlaps
-        enough to associate, and the Kalman prediction extends the range past
-        what raw IoU alone would allow.
+        At 20 px a step, two 50 px boxes overlap with IoU 0.43; at 30 px, 0.25, below
+        SORT's default ``minimum_iou_threshold`` of 0.3.
         """
-        tracker = pf.tracker.ByteTracker()
-        seen = track_sequence(tracker, [[b] for b in moving(100, 100, step, 15)])
-        assert len(assigned(seen[-1])) == expected
+        seen = track_sequence(tracker_class(), [[b] for b in moving(100, 100, step, 15)])
+        assert len(assigned(seen[-1])) == 1
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="No camera motion compensation. Association is IoU-only, so once "
-               "frame-to-frame displacement exceeds roughly 0.6x the box width the "
-               "first match never happens, velocity is never learned, and no track "
-               "is ever confirmed. Remove this marker when CMC lands.")
-    def test_camera_pan_keeps_identities(self):
-        """A translating camera must not look like every object vanishing."""
-        tracker = pf.tracker.ByteTracker()
-        frames = [[box(100 + 40 * i, 100), box(200 + 40 * i, 300)] for i in range(15)]
-        seen = track_sequence(tracker, frames)
-        settled = [assigned(f) for f in seen[4:]]
-        assert all(s == settled[0] for s in settled)
-        assert len(settled[0]) == 2
-
-    def test_fast_motion_is_dropped_not_misattributed(self):
-        """Beyond the association limit the tracker reports nothing.
-
-        Pins the current failure mode: it declines to confirm a track rather
-        than assigning a stream of new ids to the same object. Silence is the
-        better of the two wrong answers, and this test says which one we get.
-        """
-        tracker = pf.tracker.ByteTracker()
-        seen = track_sequence(tracker, [[b] for b in moving(100, 100, 40, 15)])
+    def test_no_overlap_is_never_confirmed(self, tracker_class):
+        """Beyond the association limit the tracker reports nothing, not a stream of new ids."""
+        seen = track_sequence(tracker_class(), [[b] for b in moving(100, 100, 60, 15)])
         assert assigned(seen[-1]) == set()
 
-    def test_crowd_keeps_every_object_separate(self):
+    def test_crowd_keeps_every_object_separate(self, tracker_class):
         """Eight objects in a grid, all moving together."""
-        tracker = pf.tracker.ByteTracker()
-        frames = []
-        for i in range(12):
-            frames.append([box(60 * col + 4 * i, 60 * row) for row in range(2) for col in range(4)])
-        seen = track_sequence(tracker, frames)
+        frames = [[box(60 * col + 4 * i, 60 * row) for row in range(2) for col in range(4)]
+                  for i in range(12)]
+        seen = track_sequence(tracker_class(), frames)
         assert len(assigned(seen[-1])) == 8
 
-    def test_low_confidence_detections_sustain_a_track(self):
-        """The second association stage is ByteTrack's whole point."""
-        tracker = pf.tracker.ByteTracker()
-        frames = [[b] for b in moving(0, 100, 8, 16)]
-        # Confident enough to start, then a run of weak detections mid-sequence.
-        scores = [[0.9]] * 6 + [[0.35]] * 5 + [[0.9]] * 5
-        seen = track_sequence(tracker, frames, scores=scores)
-        assert assigned(seen[5]) == assigned(seen[-1]) != set()
-
-    def test_new_object_entering_gets_a_fresh_id(self):
-        """An object that was never there before is not an existing track."""
-        tracker = pf.tracker.ByteTracker()
-        frames = [[box(0 + 8 * i, 100)] for i in range(10)]
+    def test_new_object_entering_gets_a_fresh_id(self, tracker_class):
+        frames = [[box(8 * i, 100)] for i in range(10)]
         frames += [[box(80 + 8 * i, 100), box(400, 300)] for i in range(10)]
-        seen = track_sequence(tracker, frames)
+        seen = track_sequence(tracker_class(), frames)
         assert len(assigned(seen[9])) == 1
         assert len(assigned(seen[-1])) == 2
 
-    def test_minimum_consecutive_frames_delays_confirmation(self):
-        """Tracks are unconfirmed until they have been seen enough times."""
-        tracker = pf.tracker.ByteTracker(minimum_consecutive_frames=4)
-        seen = track_sequence(tracker, [[b] for b in moving(0, 100, 5, 8)])
-        assert assigned(seen[0]) == set()
+    def test_minimum_consecutive_frames_delays_confirmation(self, tracker_class):
+        seen = track_sequence(tracker_class(minimum_consecutive_frames=4),
+                              [[b] for b in moving(0, 100, 5, 8)])
+        assert assigned(seen[2]) == set()
         assert assigned(seen[-1]) != set()
 
-    def test_stationary_object_holds_its_id(self):
-        """Zero velocity is a legitimate trajectory."""
-        tracker = pf.tracker.ByteTracker()
-        seen = track_sequence(tracker, [[box(100, 100)]] * 15)
+    def test_stationary_object_holds_its_id(self, tracker_class):
+        seen = track_sequence(tracker_class(), [[box(100, 100)]] * 15)
         settled = [assigned(f) for f in seen[4:]]
         assert all(s == settled[0] for s in settled)
         assert len(settled[0]) == 1
+
+
+def test_bytetrack_low_confidence_detections_sustain_a_track():
+    """The second association stage is ByteTrack's whole point."""
+    frames = [[b] for b in moving(0, 100, 8, 16)]
+    scores = [[0.9]] * 6 + [[0.35]] * 5 + [[0.9]] * 5
+    seen = track_sequence(pf.tracker.ByteTrack(), frames, scores=scores)
+    assert assigned(seen[5]) == assigned(seen[8]) == assigned(seen[-1]) != set()
+
+
+def test_bytetrack_low_confidence_alone_never_starts_a_track():
+    seen = track_sequence(pf.tracker.ByteTrack(), [[box(0, 0)]] * 10, scores=[[0.5]] * 10)
+    assert assigned(seen[-1]) == set()
