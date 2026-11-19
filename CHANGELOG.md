@@ -29,7 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cmc_transform=`. C-BIoU matches with buffered (enlarged) boxes, for fast or irregular motion.
   All give the same tracker IDs as upstream on MOT17. Upstream's optional ReID (appearance)
   matching for BoT-SORT is not ported. Unlike upstream, `frame_rate=None` (a video that reports
-  no rate) counts as 30.
+  no rate) counts as 30, and BoT-SORT warns once when camera motion compensation is on but
+  `update` gets no frame.
 
 ### Fixed
 

@@ -5,6 +5,8 @@
 # Changes for PixelFlow: PixelFlow Detections in and out; RGB frames; ReID removed; see pixelflow/tracker/UPSTREAM.md.
 # ------------------------------------------------------------------------
 
+import warnings
+
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
@@ -133,6 +135,7 @@ class BoTSORT(BaseTracker):
 
         self.enable_cmc = enable_cmc
         self.cmc = CMC(CMCConfig(method=cmc_method, downscale=cmc_downscale)) if enable_cmc else None
+        self._warned_cmc_without_frame = False
 
         self._init_timestamp_state(frame_rate)
 
@@ -321,6 +324,17 @@ class BoTSORT(BaseTracker):
         elif self.cmc is not None and frame is not None:
             mask_boxes = high_boxes if len(high_boxes) > 0 else None
             H = self.cmc.estimate(frame, mask_boxes)
+        elif self.cmc is not None and not self._warned_cmc_without_frame:
+            # PixelFlow change: warn once, as OC-SORT does, instead of skipping CMC silently.
+            warnings.warn(
+                f"{type(self).__name__} has enable_cmc=True but update() received neither frame nor "
+                "cmc_transform; camera motion compensation is skipped. Pass the current video frame as "
+                "update(frame=...), or create the tracker with enable_cmc=False. This warning is shown "
+                "once per tracker instance.",
+                UserWarning,
+                stacklevel=2,
+            )
+            self._warned_cmc_without_frame = True
         CMC.apply_batch(H, self.tracks)  # None (no CMC this step) is a no-op
 
         # Cache each tracklet's predicted state bbox once per update. Track state

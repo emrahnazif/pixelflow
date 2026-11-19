@@ -21,6 +21,10 @@ import pixelflow as pf
 from pixelflow.tracker.utils.iou import box_iou_batch
 from tests.helpers import make_detections as detections_of
 
+# Most tests drive BoT-SORT without frames on purpose; its once-per-tracker warning about
+# skipped camera motion compensation is tested in test_botsort_without_frame_warns_once.
+pytestmark = pytest.mark.filterwarnings("ignore:BoTSORT has enable_cmc=True:UserWarning")
+
 TRACKERS = [pf.tracker.ByteTrack, pf.tracker.SORT, pf.tracker.OCSORT, pf.tracker.BoTSORT, pf.tracker.CBIoU]
 
 
@@ -209,6 +213,16 @@ def test_unknown_frame_rate_means_30(tracker_class):
     tracker = tracker_class(frame_rate=None)
     assert tracker.maximum_frames_without_update == 30
     assert tracker._frame_rate == 30.0
+
+
+def test_botsort_without_frame_warns_once():
+    tracker = pf.tracker.BoTSORT()
+    with pytest.warns(UserWarning, match="neither frame nor cmc_transform"):
+        tracker.update(detections_of([box(0, 0)]))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        tracker.update(detections_of([box(0, 0)]))
+        pf.tracker.BoTSORT(enable_cmc=False).update(detections_of([box(0, 0)]))
 
 
 def test_lost_track_buffer_scales_with_frame_rate():
