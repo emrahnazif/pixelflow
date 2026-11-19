@@ -1,9 +1,9 @@
 """
 Unit and scenario tests for pixelflow.tracker.
 
-ByteTrack and SORT are ported from roboflow/trackers. Their tracking output was
-checked against upstream on the MOT17 validation detections (identical IDs on
-every frame); these tests pin what the port adds -- PixelFlow Detections in and
+The trackers are ported from roboflow/trackers. Their tracking output was
+checked against upstream on the MOT17 validation set (identical IDs on every
+frame, with and without camera motion compensation); these tests pin what the port adds -- PixelFlow Detections in and
 out -- and the behaviour that matters to users, on synthetic sequences: a
 tracker can pass every unit test and still switch identities the moment two
 objects cross.
@@ -12,6 +12,8 @@ Scenarios use synthetic boxes rather than a real sequence, which keeps them
 deterministic and fast. They are a regression net, not a benchmark.
 """
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -19,7 +21,7 @@ import pixelflow as pf
 from pixelflow.tracker.utils.iou import box_iou_batch
 from tests.helpers import make_detections as detections_of
 
-TRACKERS = [pf.tracker.ByteTrack, pf.tracker.SORT]
+TRACKERS = [pf.tracker.ByteTrack, pf.tracker.SORT, pf.tracker.OCSORT, pf.tracker.BoTSORT, pf.tracker.CBIoU]
 
 
 # ============================================================================
@@ -85,7 +87,9 @@ class TestDetectionsAdapter:
         assert result is not detections
 
     def test_order_and_fields_are_kept(self, tracker_class):
-        tracker = tracker_class(minimum_consecutive_frames=1, track_activation_threshold=0.1)
+        # OC-SORT has no track_activation_threshold: high_conf_det_threshold decides.
+        threshold = "high_conf_det_threshold" if tracker_class is pf.tracker.OCSORT else "track_activation_threshold"
+        tracker = tracker_class(minimum_consecutive_frames=1, **{threshold: 0.1})
         boxes = [box(0, 0), box(200, 0), box(400, 0)]
         for _ in range(3):
             detections = detections_of(boxes, scores=[0.9, 0.2, 0.8])
@@ -109,9 +113,14 @@ class TestDetectionsAdapter:
         assert assigned(ids[-1]) == {1, 2}
 
     def test_unconfirmed_is_none(self, tracker_class):
+        """An object entering mid-video is unconfirmed on its first frame.
+
+        Mid-video, because on the first frames OC-SORT confirms at once and BoT-SORT and
+        C-BIoU give the first frame's objects an ID immediately, as their papers do.
+        """
         tracker = tracker_class(minimum_consecutive_frames=3)
-        ids = track_sequence(tracker, [[box(0, 0)]])
-        assert ids == [[None]]
+        ids = track_sequence(tracker, [[box(0, 0)]] * 6 + [[box(0, 0), box(300, 300)]])
+        assert ids[-1][1] is None
 
     def test_missing_confidence_counts_as_one(self, tracker_class):
         tracker = tracker_class(minimum_consecutive_frames=1)
@@ -154,6 +163,8 @@ class TestDetectionsAdapter:
         assert assigned(ids[-1]) == {1}
 
     def test_frame_is_ignored_with_a_warning(self, tracker_class):
+        if tracker_class is pf.tracker.BoTSORT:
+            pytest.skip("BoT-SORT uses the frame for camera motion compensation")
         with pytest.warns(UserWarning, match="frame"):
             tracker_class().update(detections_of([box(0, 0)]), frame=np.zeros((10, 10, 3), np.uint8))
 
@@ -277,10 +288,11 @@ class TestTrackingScenarios:
         assert len(assigned(seen[-1])) == 2
 
     def test_minimum_consecutive_frames_delays_confirmation(self, tracker_class):
-        seen = track_sequence(tracker_class(minimum_consecutive_frames=4),
-                              [[b] for b in moving(0, 100, 5, 8)])
-        assert assigned(seen[2]) == set()
-        assert assigned(seen[-1]) != set()
+        """A new object mid-video waits for its frames (see test_unconfirmed_is_none)."""
+        frames = [[box(0, 0)]] * 6 + [[box(0, 0), b] for b in moving(300, 300, 5, 8)]
+        seen = track_sequence(tracker_class(minimum_consecutive_frames=4), frames)
+        assert seen[6 + 2][1] is None
+        assert seen[-1][1] is not None
 
     def test_stationary_object_holds_its_id(self, tracker_class):
         seen = track_sequence(tracker_class(), [[box(100, 100)]] * 15)
@@ -300,3 +312,90 @@ def test_bytetrack_low_confidence_detections_sustain_a_track():
 def test_bytetrack_low_confidence_alone_never_starts_a_track():
     seen = track_sequence(pf.tracker.ByteTrack(), [[box(0, 0)]] * 10, scores=[[0.5]] * 10)
     assert assigned(seen[-1]) == set()
+
+
+# ============================================================================
+# Camera motion compensation (BoT-SORT, OC-SORT)
+# ============================================================================
+
+def panning_video(frames=15, step=40):
+    """A textured scene panning `step` px per frame, with two objects fixed in the scene.
+
+    Each object moves `step` px per frame in the image, more than a 50 px box can move
+    and still overlap itself: without camera motion compensation no track survives.
+    """
+    rng = np.random.default_rng(0)
+    scene = rng.integers(0, 255, (400, 2000, 3), dtype=np.uint8)
+    scene = np.repeat(np.repeat(scene[::8, ::8], 8, 0), 8, 1)
+    for i in range(frames):
+        x = 1200 - step * i                      # the camera moves right, the scene left
+        image = np.ascontiguousarray(scene[:, x - 600:x + 40])
+        boxes = [box(100 + step * i, 100), box(200 + step * i, 250)]
+        yield image, detections_of(boxes)
+
+
+def test_botsort_camera_pan_keeps_identities():
+    tracker = pf.tracker.BoTSORT()
+    seen = [[d.tracker_id for d in tracker.update(dets, frame=image)] for image, dets in panning_video()]
+    assert all(ids == [1, 2] for ids in seen)
+
+
+def test_botsort_without_cmc_loses_a_panning_scene():
+    tracker = pf.tracker.BoTSORT(enable_cmc=False)
+    seen = [[d.tracker_id for d in tracker.update(dets)] for _, dets in panning_video()]
+    assert seen[0] == [1, 2]
+    assert seen[-1] != [1, 2]  # the tracks were lost
+
+
+def test_botsort_precomputed_transform():
+    """A known camera motion can be passed instead of a frame."""
+    tracker = pf.tracker.BoTSORT()
+    shift = np.array([[1.0, 0.0, 40.0], [0.0, 1.0, 0.0]])
+    seen = [[d.tracker_id for d in tracker.update(dets, cmc_transform=shift if i else None)]
+            for i, (_, dets) in enumerate(panning_video())]
+    assert all(ids == [1, 2] for ids in seen)
+
+
+def test_botsort_rejects_frame_and_transform_together():
+    with pytest.raises(ValueError, match="both"):
+        pf.tracker.BoTSORT().update(detections_of([box(0, 0)]), frame=np.zeros((10, 10, 3), np.uint8),
+                                    cmc_transform=np.eye(2, 3))
+
+
+def test_ocsort_camera_pan_with_cmc():
+    tracker = pf.tracker.OCSORT(enable_cmc=True)
+    seen = [[d.tracker_id for d in tracker.update(dets, frame=image)] for image, dets in panning_video()]
+    assert all(ids == seen[-1] for ids in seen[3:])
+    assert len(assigned(seen[-1])) == 2
+
+
+def test_ocsort_cmc_without_frame_warns_once():
+    tracker = pf.tracker.OCSORT(enable_cmc=True)
+    with pytest.warns(UserWarning, match="frame=None"):
+        tracker.update(detections_of([box(0, 0)]))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        tracker.update(detections_of([box(0, 0)]))
+
+
+def test_cbiou_ignores_transform_with_a_warning():
+    with pytest.warns(UserWarning, match="cmc_transform"):
+        pf.tracker.CBIoU().update(detections_of([box(0, 0)]), cmc_transform=np.eye(2, 3))
+
+
+def test_cbiou_buffer_tracks_beyond_plain_iou():
+    """Buffered IoU matches boxes that no longer overlap at all, where IoU-only trackers fail."""
+    frames = [[b] for b in moving(100, 100, 60, 15)]   # 60 px steps: 50 px boxes never overlap
+    assert assigned(track_sequence(pf.tracker.ByteTrack(), frames)[-1]) == set()
+    seen = track_sequence(pf.tracker.CBIoU(buffer_ratio_first=0.5, buffer_ratio_second=0.5), frames)
+    assert all(ids == [1] for ids in seen)
+
+
+@pytest.mark.parametrize("tracker_class", TRACKERS)
+def test_low_confidence_detections_are_kept_in_order(tracker_class):
+    """Every detection comes back in order; BoT-SORT and C-BIoU ignore ones at 0.1 or below."""
+    tracker = tracker_class(minimum_consecutive_frames=1)
+    for _ in range(3):
+        result = tracker.update(detections_of([box(0, 0), box(200, 0)], scores=[0.9, 0.05]))
+    assert [d.tracker_id for d in result] == [1, None]
+    assert [d.confidence for d in result] == [0.9, 0.05]
