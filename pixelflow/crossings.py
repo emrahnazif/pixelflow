@@ -313,11 +313,8 @@ class Crossing:
             - Hash function ensures even distribution across color space
             - High saturation (0.8) and brightness (0.9) for visibility
         """
-        import colorsys
-        golden_ratio = 0.618033988749895
-        hue = (hash(str(line_id)) * golden_ratio) % 1.0
-        rgb = colorsys.hsv_to_rgb(hue, 0.8, 0.9)
-        return tuple(int(c * 255) for c in rgb)
+        from .colors import _color_for_id
+        return _color_for_id(line_id)
     
     def _calculate_line_geometry(self):
         """Calculate line equation coefficients for efficient point-to-line side determination.

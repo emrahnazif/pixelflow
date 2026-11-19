@@ -140,14 +140,8 @@ class Zone:
         Returns:
             Tuple[int, int, int]: RGB color tuple with values in range [0, 255].
         """
-        # Use golden ratio for better color distribution
-        golden_ratio = 0.618033988749895
-        hue = (hash(str(zone_id)) * golden_ratio) % 1.0
-        
-        # Convert HSV to RGB (simplified)
-        import colorsys
-        rgb = colorsys.hsv_to_rgb(hue, 0.8, 0.9)
-        return tuple(int(c * 255) for c in rgb)
+        from .colors import _color_for_id
+        return _color_for_id(zone_id)
     
     def check_detection(self, bbox: List[float], tracker_id: Optional[int] = None) -> bool:
         """

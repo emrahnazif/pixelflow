@@ -431,6 +431,16 @@ class TestZoneCrossingEdgeCases:
             crossings.update(pf.Detections(), strategy="any_corner")
         assert line.triggering_anchor == "bottom_center"
 
+    def test_zone_and_line_colors_differ(self):
+        zones = pf.Zones()
+        for _ in range(3):
+            zones.add_zone([(0, 0), (10, 0), (10, 10)])
+        crossings = pf.Crossings()
+        for _ in range(3):
+            crossings.add_crossing(start=(0, 0), end=(10, 0))
+        assert len({z.color for z in zones.zones}) == 3
+        assert len({c.color for c in crossings.crossings}) == 3
+
     def test_crossing_with_untracked_detections(self, sample_detections):
         """Test crossings with detections without tracker IDs."""
         crossings = pf.Crossings()

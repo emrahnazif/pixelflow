@@ -106,3 +106,17 @@ def _get_color_for_prediction(prediction, colors_override=None, palette='default
         class_id = sum(class_id.encode("utf-8"))
 
     return active[class_id % len(active)]
+
+
+def _color_for_id(key) -> tuple:
+    """A distinct, stable RGB color for an id such as a zone or line id.
+
+    Integer ids step the hue by the golden ratio, so ids 0, 1, 2... get well-separated
+    colors; other ids go through a stable checksum (Python's ``hash`` of a string changes
+    between runs).
+    """
+    import colorsys
+    import zlib
+    seed = key if isinstance(key, int) else zlib.crc32(str(key).encode())
+    hue = (seed * 0.618033988749895) % 1.0
+    return tuple(int(c * 255) for c in colorsys.hsv_to_rgb(hue, 0.8, 0.9))

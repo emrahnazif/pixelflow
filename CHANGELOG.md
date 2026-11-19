@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and it held a frame number (with `fps`) or a `datetime`. It is now seconds from the start of
   the video with `fps`, or a Unix timestamp without; `get_tracker_stats` gives the same, and
   the `first_seen`, `zone_times` and `line_cross_times` attributes now hold seconds too.
+- **Zones and crossing lines get distinct default colors.** The color was picked from
+  `hash(id) * 0.618 % 1`, which is always 0 for numbers that large, so every zone and line was
+  the same red. Integer ids now step through the hues; named ids use a stable checksum.
 - **`Crossing` refuses anchors it cannot test.** A list of anchors, or a zone test such as
   `"overlap"`, silently tested the box center. `triggering_anchor` (and the `strategy` override
   of `Crossings.update`) must now be one of the nine box points, or it raises `ValueError`.
