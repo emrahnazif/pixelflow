@@ -1,48 +1,57 @@
 """
-Temporal detection smoothing for reducing jitter and stabilizing tracked objects.
+Temporal smoothing of tracked detections, using a Buffer's past and future frames.
 
-This module provides advanced buffer-based smoothing algorithms that use temporal context
-from past, current, and future frames to reduce bounding box jitter, stabilize confidence
-scores, and interpolate missing detections. Designed to work seamlessly with PixelFlow's
-buffer system for high-quality temporal smoothing in real-time applications.
+``smooth`` averages each tracked object's box over the frames around the one being smoothed,
+which removes the frame-to-frame jitter of detection boxes, and fills in an object the model
+missed in that frame when it was found before and after it.
 """
 
 import warnings
-from typing import Optional, Dict, List, Tuple, Union, TYPE_CHECKING
 from collections import defaultdict
-import numpy as np
-from pixelflow.detections import Detections, Detection
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+
+from pixelflow.detections import Detection, Detections
+from pixelflow.transforms.detections import _translate_detection
 
 if TYPE_CHECKING:
     from pixelflow.buffer import Buffer
 
+# One entry per sighting of a tracker id in the buffer: (offset from the smoothed frame, detection).
+_Sighting = Tuple[int, Detection]
+
 
 def smooth(buffer: 'Buffer', temporal_weight_decay: float = 0.8) -> Detections:
     """
-    Smooth detection results using buffer's temporal context for jitter reduction.
-    
-    Applies sophisticated temporal smoothing using past, current, and future frames
-    with exponential weight decay. Reduces bounding box jitter, stabilizes confidence
-    scores, and interpolates missing detections when objects temporarily disappear.
-    
+    Smooth the detections of the frame the buffer last returned.
+
+    Each tracked detection's box (and confidence) becomes a weighted average of the same
+    object's boxes in the buffer: weight 1 for the frame itself, ``temporal_weight_decay`` for
+    the frames next to it, ``temporal_weight_decay ** 2`` for the ones after, and so on. An
+    object missing from the frame but found both before and after it is filled in.
+
     Args:
-        buffer (Buffer): Buffer instance containing temporal context with past, current,
-                        and future detection frames. Must have temporal context available.
-        temporal_weight_decay (float): Exponential decay factor for temporal weighting.
-                                     Current frame weight = 1.0, adjacent frames = decay^1,
-                                     next frames = decay^2, etc. Range: [0.1, 1.0].
-                                     Default is 0.8 (20% decay per frame distance).
-        
+        buffer (Buffer): The buffer holding the frames' results, as ``Detections`` with
+            tracker ids. ``update`` or ``flush`` must have returned a frame.
+        temporal_weight_decay (float): Weight of each step away from the smoothed frame.
+            Range: [0.1, 1.0]. Default is 0.8.
+
     Returns:
-        Detections: Smoothed detections for the current frame with reduced jitter and
-                   stabilized confidence scores. Returns raw current frame results if
-                   temporal context is unavailable.
-    
+        Detections: A new ``Detections`` (the buffer is never changed) holding a copy of each
+        detection of the frame, in order: tracked ones with box and confidence smoothed and
+        every other field kept (mask arrays shared), untracked ones unsmoothed. Then the
+        filled-in detections: copies of the object's nearest earlier detection, moved (box,
+        masks, outline, keypoints) by distance between its nearest detections before and
+        after, with 85% of their average confidence (None if either has none), no line
+        crossings, and ``metadata["interpolated"] = True`` and
+        ``metadata["interpolation_source"] = "buffer_smoother"``.
+
+        Without a full window (near the start and end of a video), or with a warning when no
+        detection in the buffer has a tracker id, the copies are unsmoothed; before the buffer
+        has returned a frame, the result is empty. Tracker ids are assumed unique in a frame.
+
     Raises:
-        AttributeError: If buffer lacks required methods or temporal context structure.
-        ValueError: If temporal_weight_decay is outside valid range [0.1, 1.0].
-        TypeError: If buffer is not a valid Buffer instance.
-        
+        ValueError: If ``temporal_weight_decay`` is outside [0.1, 1.0].
+
     Example:
         >>> import pixelflow as pf
         >>>
@@ -56,24 +65,7 @@ def smooth(buffer: 'Buffer', temporal_weight_decay: float = 0.8) -> Detections:
         ...     smoothed = pf.smooth(buffer)
         >>> for results, frame in buffer.flush():
         ...     smoothed = pf.smooth(buffer)  # the last frames come back unsmoothed
-        >>>
-        >>> # Conservative smoothing for fast-moving objects
-        >>> smoothed = pf.smooth(buffer, temporal_weight_decay=0.9)
 
-    Notes:
-        - Smooths the frame the buffer last returned, from update() or flush()
-        - Needs `delay` frames on both sides: near the start and end of a video, the raw
-          results of that frame are returned; before any frame is returned, empty Detections
-        - Automatically interpolates missing detections when objects appear in past/future but not current frame
-        - Preserves all detection attributes (masks, keypoints, etc.) from current frame
-        - Weight decay applies exponentially: frame distance 1 = decay^1, distance 2 = decay^2, etc.
-        - Smoothing quality improves with larger buffer sizes but increases latency
-        
-    Performance Notes:
-        - Computational complexity: O(n*k) where n=detections, k=buffer_size
-        - Memory usage scales linearly with buffer size and detection count
-        - Optimized for real-time processing with minimal overhead
-        
     See Also:
         Buffer : Temporal frame buffer for storing detection history
     """
@@ -82,25 +74,19 @@ def smooth(buffer: 'Buffer', temporal_weight_decay: float = 0.8) -> Detections:
             f"temporal_weight_decay must be between 0.1 and 1.0, got {temporal_weight_decay}"
         )
 
-    # The frame being smoothed is the one update() or flush() last returned.
     context = buffer.get_temporal_context()
     if context is None:
         return Detections()
-    raw_results = context['current_results']
+    current = context['current_results']
 
-    # Smoothing averages a detection with the same number of frames on each side. Near the
-    # start and end of a video one side is short, and a one-sided average pulls a moving box
-    # towards where it is going, so those frames come back unsmoothed.
-    if len(context['past_results']) < buffer.delay or len(context['future_results']) < buffer.delay:
-        return raw_results
+    # A full window: everything the buffer holds before and after the frame (an even buffer
+    # holds one frame fewer before it than after it).
+    if (len(context['past_results']) < buffer.buffer_size - 1 - buffer.delay
+            or len(context['future_results']) < buffer.delay):
+        return _copy_all(current)
 
-    # Group all detections by tracker_id across all temporal frames
-    tracker_detections = _collect_temporal_detections(context)
-
-    # Smoothing groups a detection with its own past and future, which only a
-    # tracker_id can establish. Untracked detections group into nothing, so
-    # returning them unsmoothed says so rather than dropping them silently.
-    if len(raw_results) > 0 and not tracker_detections:
+    sightings = _sightings_by_tracker_id(context)
+    if len(current) > 0 and not sightings:
         warnings.warn(
             "No detections have tracker_id. Smoothing matches each detection to "
             "itself across frames, which requires tracking. "
@@ -108,552 +94,97 @@ def smooth(buffer: 'Buffer', temporal_weight_decay: float = 0.8) -> Detections:
             UserWarning,
             stacklevel=2,
         )
-        return raw_results
+        return _copy_all(current)
 
-    # A tracker present in this frame is smoothed from its neighbours; one absent
-    # from it is interpolated between them. Both paths split on the same set, so
-    # neither can claim a tracker the other is already handling.
-    current_tracker_ids = _current_tracker_ids(context)
+    result = Detections()
+    for detection in current:
+        seen = sightings.get(detection.tracker_id)
+        result.add_detection(
+            _smoothed(detection, seen, temporal_weight_decay) if seen else detection.copy(share_masks=True)
+        )
 
-    # Generate smoothed detections for each tracker
-    smoothed_detections = Detections()
-    for tracker_id, detections in tracker_detections.items():
-        if tracker_id not in current_tracker_ids:
-            continue
-        smoothed_detection = _smooth_temporal_detections(detections, temporal_weight_decay)
-        if smoothed_detection is not None:
-            smoothed_detections.add_detection(smoothed_detection)
-
-    # Check for missing detections that can be interpolated
-    missing_detections = _find_missing_detections(context, tracker_detections)
-    for interpolated_detection in missing_detections:
-        smoothed_detections.add_detection(interpolated_detection)
-
-    return smoothed_detections
+    present = {d.tracker_id for d in current}
+    for tracker_id, seen in sightings.items():
+        if tracker_id not in present:
+            filled = _filled_in(seen)
+            if filled is not None:
+                result.add_detection(filled)
+    return result
 
 
-def _current_tracker_ids(context: Dict) -> set:
+def _copy_all(detections: Detections) -> Detections:
+    """A new ``Detections`` holding a copy of each detection (mask arrays shared)."""
+    result = Detections()
+    for detection in detections:
+        result.add_detection(detection.copy(share_masks=True))
+    return result
+
+
+def _sightings_by_tracker_id(context: Dict) -> Dict[int, List[_Sighting]]:
+    """Every tracked detection of the buffer, grouped by tracker id, with its frame offset.
+
+    Offsets are negative for past frames (-1 is the frame just before), 0 for the smoothed
+    frame and positive for future frames.
     """
-    Tracker IDs present in the frame being smoothed.
+    sightings: Dict[int, List[_Sighting]] = defaultdict(list)
+    past = context['past_results']
+    frames = list(enumerate(past, start=-len(past)))
+    frames.append((0, context['current_results']))
+    frames.extend(enumerate(context['future_results'], start=1))
+    for offset, detections in frames:
+        for detection in detections:
+            if detection.tracker_id is not None and detection.bbox is not None:
+                sightings[detection.tracker_id].append((offset, detection))
+    return sightings
 
-    This set is what divides the two halves of `smooth`: a tracker inside it is
-    smoothed from its neighbours, one outside it is interpolated between them.
-    One definition, so the two halves cannot disagree and emit the same
-    tracker_id twice in a single frame.
 
-    Args:
-        context (Dict): Temporal context dictionary from `Buffer.get_temporal_context`.
+def _smoothed(detection: Detection, seen: List[_Sighting], decay: float) -> Detection:
+    """A copy of ``detection`` with its box and confidence averaged over ``seen``."""
+    weights = [decay ** abs(offset) for offset, _ in seen]
+    total = sum(weights)
+    bbox = [
+        sum(w * d.bbox[i] for w, (_, d) in zip(weights, seen)) / total for i in range(4)
+    ]
+    rated = [(w, d.confidence) for w, (_, d) in zip(weights, seen) if d.confidence is not None]
 
-    Returns:
-        set: Tracker IDs found in the current frame, empty if it has none.
+    smoothed = detection.copy(share_masks=True)
+    smoothed.bbox = bbox
+    if rated:
+        smoothed.confidence = sum(w * c for w, c in rated) / sum(w for w, _ in rated)
+    return smoothed
+
+
+def _filled_in(seen: List[_Sighting]) -> Optional[Detection]:
+    """The detection expected in the smoothed frame between the nearest sightings around it.
+
+    The box is placed by distance: with the object at offset -2 and +1, it goes two thirds of
+    the way. Masks, outline and keypoints move with the box's center.
     """
-    current_detections = context['current_results']
-    if not current_detections:
-        return set()
-    return {detection.tracker_id for detection in current_detections.detections
-            if detection.tracker_id is not None}
-
-
-def _collect_temporal_detections(context: Dict) -> Dict[int, List[Tuple[str, int, Detection]]]:
-    """
-    Aggregate detections by tracker ID across all temporal frames.
-    
-    Groups all detections from past, current, and future frames by their tracker ID
-    to enable temporal smoothing for each tracked object individually.
-    
-    Args:
-        context (Dict): Temporal context dictionary containing 'past_results',
-                       'current_results', and 'future_results' keys with
-                       Detections objects or None values.
-        
-    Returns:
-        Dict[int, List[Tuple[str, int, Detection]]]: Dictionary mapping tracker IDs
-                                                   to lists of temporal detection data.
-                                                   Each tuple contains (frame_type, frame_offset, detection)
-                                                   where frame_type is 'past'/'current'/'future',
-                                                   frame_offset is relative position, and detection
-                                                   is the Detection object.
-    
-    Raises:
-        KeyError: If context dict is missing required keys ('past_results', 'current_results', 'future_results').
-        AttributeError: If detection objects lack required tracker_id attribute.
-        
-    Example:
-        >>> import pixelflow as pf
-        >>> from pixelflow.buffer import Buffer
-        >>> 
-        >>> # Get temporal context from buffer
-        >>> buffer = Buffer(buffer_size=5)
-        >>> # ... fill buffer with frames ...
-        >>> context = buffer.get_temporal_context()
-        >>> 
-        >>> # Collect detections by tracker ID
-        >>> tracker_detections = pf.smoother._collect_temporal_detections(context)
-        >>> print(f"Tracking {len(tracker_detections)} objects")
-        >>> 
-        >>> # Access detections for specific tracker
-        >>> tracker_1_data = tracker_detections[1]  # List of temporal detections
-        >>> for frame_type, offset, detection in tracker_1_data:
-        >>>     print(f"Frame {frame_type}({offset}): bbox {detection.bbox}")
-    
-    Notes:
-        - Only processes detections with valid (non-None) tracker IDs
-        - Frame offsets: negative for past frames, 0 for current, positive for future
-        - Handles empty or None detection results gracefully
-        - Preserves temporal ordering for each tracker across all frames
-        - Essential preprocessing step for temporal smoothing algorithms
-    """
-    tracker_detections = defaultdict(list)
-    
-    # Add past detections (negative offsets)
-    for i, detections in enumerate(context['past_results']):
-        if detections and len(detections) > 0:
-            frame_offset = i - len(context['past_results'])  # -2, -1
-            for detection in detections.detections:
-                if detection.tracker_id is not None:
-                    tracker_detections[detection.tracker_id].append(('past', frame_offset, detection))
-    
-    # Add current detection (offset 0)
-    current_detections = context['current_results']
-    if current_detections and len(current_detections) > 0:
-        for detection in current_detections.detections:
-            if detection.tracker_id is not None:
-                tracker_detections[detection.tracker_id].append(('current', 0, detection))
-    
-    # Add future detections (positive offsets)  
-    for i, detections in enumerate(context['future_results']):
-        if detections and len(detections) > 0:
-            frame_offset = i + 1  # +1, +2
-            for detection in detections.detections:
-                if detection.tracker_id is not None:
-                    tracker_detections[detection.tracker_id].append(('future', frame_offset, detection))
-    
-    return tracker_detections
-
-
-def _smooth_temporal_detections(detections: List[Tuple[str, int, Detection]], temporal_weight_decay: float) -> Optional[Detection]:
-    """
-    Apply temporal smoothing to detections for a single tracked object.
-    
-    Computes weighted averages of bounding boxes and confidence scores across temporal
-    frames, with exponential decay weighting based on distance from current frame.
-    Preserves detection metadata from the current frame when available.
-    
-    Args:
-        detections (List[Tuple[str, int, Detection]]): List of temporal detection data
-                                                     where each tuple contains
-                                                     (frame_type, frame_offset, detection).
-                                                     Frame types: 'past', 'current', 'future'.
-        temporal_weight_decay (float): Exponential decay factor for temporal weighting.
-                                     Applied as decay^|frame_offset| to each detection.
-                                     Range: [0.1, 1.0].
-        
-    Returns:
-        Optional[Detection]: Smoothed detection with weighted average bbox and confidence,
-                           or None if no valid detections available for smoothing.
-    
-    Raises:
-        IndexError: If detections list is malformed or contains invalid tuples.
-        AttributeError: If detection objects lack required bbox or confidence attributes.
-        ValueError: If temporal_weight_decay is outside valid range.
-        
-    Example:
-        >>> import pixelflow as pf
-        >>> from pixelflow.detections import Detection
-        >>> 
-        >>> # Create temporal detections for tracker ID 1
-        >>> detection1 = Detection(bbox=[100, 100, 200, 200], confidence=0.9, tracker_id=1)
-        >>> detection2 = Detection(bbox=[102, 98, 198, 202], confidence=0.85, tracker_id=1)
-        >>> detection3 = Detection(bbox=[98, 102, 202, 198], confidence=0.88, tracker_id=1)
-        >>> 
-        >>> temporal_data = [
-        >>>     ('past', -1, detection1),
-        >>>     ('current', 0, detection2),
-        >>>     ('future', 1, detection3)
-        >>> ]
-        >>> 
-        >>> # Apply temporal smoothing
-        >>> smoothed = pf.smoother._smooth_temporal_detections(temporal_data, 0.8)
-        >>> print(f"Smoothed bbox: {smoothed.bbox}")
-        >>> print(f"Smoothed confidence: {smoothed.confidence}")
-        >>> 
-        >>> # Handle missing current frame detection
-        >>> temporal_data_no_current = [
-        >>>     ('past', -1, detection1),
-        >>>     ('future', 1, detection3)
-        >>> ]
-        >>> smoothed = pf.smoother._smooth_temporal_detections(temporal_data_no_current, 0.8)
-    
-    Notes:
-        - Uses current frame detection as template for metadata (class_id, masks, etc.)
-        - Falls back to most recent detection if no current frame detection available
-        - Applies exponential temporal weighting: weight = decay^|frame_offset|
-        - Skips detections with invalid (None) bounding boxes
-        - Preserves all non-smoothed attributes (masks, keypoints, segments, zones)
-        - Returns None if no valid bounding boxes available for smoothing
-        
-    Performance Notes:
-        - Linear complexity O(n) where n is number of temporal detections
-        - Minimal memory allocation using numpy for efficient bbox averaging
-    """
-    if not detections:
+    before = [s for s in seen if s[0] < 0]
+    after = [s for s in seen if s[0] > 0]
+    if not before or not after:
         return None
-    
-    # Find current detection to use as template
-    current_detection = None
-    for frame_type, offset, detection in detections:
-        if frame_type == 'current':
-            current_detection = detection
-            break
-    
-    # If no current detection, use the most recent one as template
-    if current_detection is None:
-        current_detection = detections[-1][2]
-    
-    # Collect valid detections with weights
-    weighted_bboxes = []
-    weighted_confidences = []
-    
-    for frame_type, frame_offset, detection in detections:
-        if detection.bbox is None:
-            continue
-            
-        # Calculate temporal weight based on distance from current frame
-        weight = temporal_weight_decay ** abs(frame_offset)
-        
-        # Add bbox and confidence with weight
-        weighted_bboxes.append((weight, detection.bbox))
-        if detection.confidence is not None:
-            weighted_confidences.append((weight, detection.confidence))
-    
-    # Calculate weighted averages
-    smoothed_bbox = _weighted_average_bbox(weighted_bboxes)
-    smoothed_confidence = _weighted_average_confidence(weighted_confidences)
-    
-    if smoothed_bbox is None:
-        return None
-    
-    # Create smoothed detection
-    return Detection(
-        bbox=smoothed_bbox,
-        confidence=smoothed_confidence,
-        class_id=current_detection.class_id,
-        class_name=current_detection.class_name,
-        text=current_detection.text,
-        tracker_id=current_detection.tracker_id,
-        masks=current_detection.masks,
-        segments=current_detection.segments,
-        keypoints=current_detection.keypoints,
-        zones=current_detection.zones,
-        zone_names=current_detection.zone_names,
-        metadata=current_detection.metadata
-    )
+    t_before, previous = max(before, key=lambda s: s[0])
+    t_after, following = min(after, key=lambda s: s[0])
 
+    share = -t_before / (t_after - t_before)
+    bbox = [p + (f - p) * share for p, f in zip(previous.bbox, following.bbox)]
 
-def _weighted_average_bbox(weighted_bboxes: List[Tuple[float, List[float]]]) -> Optional[List[float]]:
-    """
-    Compute weighted average of bounding boxes for temporal smoothing.
-    
-    Calculates element-wise weighted average of bounding box coordinates using
-    temporal weights to reduce jitter and stabilize object boundaries.
-    
-    Args:
-        weighted_bboxes (List[Tuple[float, List[float]]]): List of (weight, bbox) tuples
-                                                         where weight is temporal weight
-                                                         and bbox is [x1, y1, x2, y2] coordinates.
-        
-    Returns:
-        Optional[List[float]]: Smoothed bounding box as [x1, y1, x2, y2] coordinates,
-                              or None if no valid bboxes or zero total weight.
-    
-    Raises:
-        ValueError: If bbox coordinates are malformed or contain invalid values.
-        TypeError: If weights are not numeric or bboxes are not lists.
-        
-    Example:
-        >>> import pixelflow as pf
-        >>> 
-        >>> # Temporal bounding boxes with weights
-        >>> weighted_bboxes = [
-        >>>     (0.64, [100, 100, 200, 200]),  # Past frame (weight=0.8^2)
-        >>>     (0.8, [102, 98, 198, 202]),    # Adjacent frame (weight=0.8^1)
-        >>>     (1.0, [98, 102, 202, 198]),    # Current frame (weight=1.0)
-        >>> ]
-        >>> 
-        >>> # Calculate weighted average
-        >>> smoothed_bbox = pf.smoother._weighted_average_bbox(weighted_bboxes)
-        >>> print(f"Smoothed bbox: {smoothed_bbox}")  # [99.5, 100.2, 199.8, 199.7]
-        >>> 
-        >>> # Handle empty input
-        >>> result = pf.smoother._weighted_average_bbox([])
-        >>> print(result)  # None
-    
-    Notes:
-        - Normalizes weights automatically (divides by total weight)
-        - Handles zero total weight by returning None
-        - Uses numpy for efficient vectorized computation
-        - Preserves coordinate precision with float arithmetic
-        - Essential component of temporal detection smoothing pipeline
-    """
-    if not weighted_bboxes:
-        return None
-    
-    total_weight = sum(weight for weight, _ in weighted_bboxes)
-    if total_weight == 0:
-        return None
-    
-    # Calculate weighted sum
-    weighted_sum = np.zeros(4)
-    for weight, bbox in weighted_bboxes:
-        weighted_sum += np.array(bbox) * weight
-    
-    # Return weighted average
-    return (weighted_sum / total_weight).tolist()
+    filled = previous.copy(share_masks=True)
+    dx = (bbox[0] + bbox[2] - previous.bbox[0] - previous.bbox[2]) / 2
+    dy = (bbox[1] + bbox[3] - previous.bbox[1] - previous.bbox[3]) / 2
+    raster = next((m for m in filled.masks or () if hasattr(m, 'shape')), None)
+    _translate_detection(filled, dx, dy, canvas_shape=None if raster is None else raster.shape)
+    filled.bbox = bbox
 
-
-def _weighted_average_confidence(weighted_confidences: List[Tuple[float, float]]) -> Optional[float]:
-    """
-    Compute weighted average of confidence scores for temporal smoothing.
-    
-    Calculates weighted average of detection confidence scores using temporal weights
-    to reduce confidence fluctuations and provide more stable object detection scores.
-    
-    Args:
-        weighted_confidences (List[Tuple[float, float]]): List of (weight, confidence) tuples
-                                                        where weight is temporal weight
-                                                        and confidence is detection score [0.0, 1.0].
-        
-    Returns:
-        Optional[float]: Smoothed confidence score in range [0.0, 1.0],
-                        or None if no valid confidences or zero total weight.
-    
-    Raises:
-        ValueError: If confidence scores are outside valid range [0.0, 1.0].
-        TypeError: If weights or confidences are not numeric.
-        
-    Example:
-        >>> import pixelflow as pf
-        >>> 
-        >>> # Temporal confidence scores with weights
-        >>> weighted_confidences = [
-        >>>     (0.64, 0.85),  # Past frame confidence
-        >>>     (0.8, 0.92),   # Adjacent frame confidence
-        >>>     (1.0, 0.88),   # Current frame confidence
-        >>> ]
-        >>> 
-        >>> # Calculate weighted average
-        >>> smoothed_conf = pf.smoother._weighted_average_confidence(weighted_confidences)
-        >>> print(f"Smoothed confidence: {smoothed_conf:.3f}")  # 0.886
-        >>> 
-        >>> # Handle missing confidences
-        >>> result = pf.smoother._weighted_average_confidence([])
-        >>> print(result)  # None
-    
-    Notes:
-        - Normalizes weights automatically (divides by total weight)
-        - Returns None for empty input or zero total weight
-        - Maintains confidence score precision with float arithmetic
-        - Helps stabilize confidence fluctuations in temporal sequences
-        - Complementary to bounding box smoothing in detection stabilization
-    """
-    if not weighted_confidences:
-        return None
-    
-    total_weight = sum(weight for weight, _ in weighted_confidences)
-    if total_weight == 0:
-        return None
-    
-    # Calculate weighted average
-    weighted_sum = sum(weight * conf for weight, conf in weighted_confidences)
-    return float(weighted_sum / total_weight)
-
-
-def _find_missing_detections(context: Dict, tracker_detections: Dict[int, List[Tuple[str, int, Detection]]]) -> List[Detection]:
-    """
-    Identify and interpolate missing detections in the current frame.
-    
-    Finds tracked objects that appear in both past and future frames but are missing
-    in the current frame, then generates interpolated detections to maintain tracking
-    continuity and reduce detection gaps.
-    
-    Args:
-        context (Dict): Temporal context dictionary containing past, current, and
-                       future detection results from buffer.
-        tracker_detections (Dict[int, List[Tuple[str, int, Detection]]]): Pre-collected
-                                                                        temporal detections
-                                                                        grouped by tracker ID.
-        
-    Returns:
-        List[Detection]: List of interpolated detections for objects missing in current
-                        frame but present in both past and future frames. Each detection
-                        has interpolated bbox, confidence, and 'interpolated' flag in data.
-    
-    Raises:
-        KeyError: If context dictionary is missing required keys.
-        AttributeError: If detection objects lack required tracker_id attribute.
-        TypeError: If tracker_detections is not properly structured dictionary.
-        
-    Example:
-        >>> import pixelflow as pf
-        >>> from pixelflow.buffer import Buffer
-        >>> 
-        >>> # Setup buffer and get temporal context
-        >>> buffer = Buffer(buffer_size=5)
-        >>> # ... fill buffer with frames where object disappears temporarily ...
-        >>> context = buffer.get_temporal_context()
-        >>> tracker_detections = pf.smoother._collect_temporal_detections(context)
-        >>> 
-        >>> # Find missing detections
-        >>> missing = pf.smoother._find_missing_detections(context, tracker_detections)
-        >>> print(f"Found {len(missing)} missing detections to interpolate")
-        >>> 
-        >>> # Check interpolated detections
-        >>> for detection in missing:
-        >>>     if detection.metadata and detection.metadata.get('interpolated'):
-        >>>         print(f"Interpolated tracker {detection.tracker_id}: {detection.bbox}")
-        >>> 
-        >>> # Use with smoothing pipeline
-        >>> smoothed_detections = pf.smoother.smooth(buffer)
-        >>> # missing detections are automatically included in smoothed results
-    
-    Notes:
-        - Only interpolates when object appears in both past AND future frames
-        - Skips objects already present in current frame
-        - Uses linear interpolation for bounding box coordinates
-        - Applies confidence decay factor (0.85) to indicate interpolated nature
-        - Marks interpolated detections with 'interpolated': True in data dict
-        - Essential for maintaining tracking continuity during temporary occlusions
-        - Reduces tracking ID switches caused by detection gaps
-        
-    Performance Notes:
-        - Complexity: O(k*n) where k=trackers, n=avg detections per tracker
-        - Minimal overhead when no missing detections found
-    """
-    current_tracker_ids = _current_tracker_ids(context)
-
-    missing_detections = []
-    
-    # Check each tracker in temporal detections
-    for tracker_id, detections in tracker_detections.items():
-        if tracker_id in current_tracker_ids:
-            continue  # Already present in current frame
-        
-        # Check if tracker appears in both past and future
-        has_past = any(frame_type == 'past' for frame_type, _, _ in detections)
-        has_future = any(frame_type == 'future' for frame_type, _, _ in detections)
-        
-        if has_past and has_future:
-            # Interpolate missing detection
-            interpolated = _interpolate_missing_detection(detections)
-            if interpolated is not None:
-                missing_detections.append(interpolated)
-    
-    return missing_detections
-
-
-def _interpolate_missing_detection(detections: List[Tuple[str, int, Detection]]) -> Optional[Detection]:
-    """
-    Interpolate missing detection using closest past and future detections.
-    
-    Creates an interpolated detection by linearly interpolating bounding box coordinates
-    and averaging confidence scores from the closest past and future detections.
-    Applies confidence decay to indicate interpolated nature.
-    
-    Args:
-        detections (List[Tuple[str, int, Detection]]): List of temporal detection data
-                                                     containing both past and future detections.
-                                                     Each tuple: (frame_type, frame_offset, detection).
-        
-    Returns:
-        Optional[Detection]: Interpolated detection with averaged bbox and confidence,
-                           or None if interpolation not possible (missing past or future data).
-    
-    Raises:
-        ValueError: If detections contain invalid bbox coordinates.
-        AttributeError: If detection objects lack required attributes.
-        IndexError: If detections list structure is malformed.
-        
-    Example:
-        >>> import pixelflow as pf
-        >>> from pixelflow.detections import Detection
-        >>> 
-        >>> # Create past and future detections for interpolation
-        >>> past_det = Detection(bbox=[100, 100, 200, 200], confidence=0.9, 
-        >>>                     class_id=0, tracker_id=1)
-        >>> future_det = Detection(bbox=[110, 95, 210, 205], confidence=0.85, 
-        >>>                       class_id=0, tracker_id=1)
-        >>> 
-        >>> # Temporal detection data (missing current frame)
-        >>> temporal_data = [
-        >>>     ('past', -1, past_det),
-        >>>     ('future', 1, future_det)
-        >>> ]
-        >>> 
-        >>> # Interpolate missing detection
-        >>> interpolated = pf.smoother._interpolate_missing_detection(temporal_data)
-        >>> print(f"Interpolated bbox: {interpolated.bbox}")  # [105, 97.5, 205, 202.5]
-        >>> print(f"Interpolated confidence: {interpolated.confidence}")  # ~0.744 (avg * 0.85)
-        >>> print(f"Is interpolated: {interpolated.metadata['interpolated']}")  # True
-        >>> 
-        >>> # Handle insufficient data
-        >>> incomplete_data = [('past', -1, past_det)]  # Missing future detection
-        >>> result = pf.smoother._interpolate_missing_detection(incomplete_data)
-        >>> print(result)  # None
-    
-    Notes:
-        - Requires both past and future detections for interpolation
-        - Uses closest temporal neighbors (highest past offset, lowest future offset)
-        - Applies simple linear interpolation for bounding box coordinates
-        - Averages confidence scores then applies 0.85 decay factor
-        - Copies class_id, tracker_id, and other metadata from past detection
-        - Marks result with 'interpolated': True and source information in data dict
-        - Returns None if either past or future detections lack valid bounding boxes
-        
-    Performance Notes:
-        - Constant time complexity O(1) for interpolation computation
-        - Uses numpy for efficient coordinate averaging
-    """
-    # Separate past and future detections
-    past_detections = [(offset, detection) for frame_type, offset, detection in detections if frame_type == 'past']
-    future_detections = [(offset, detection) for frame_type, offset, detection in detections if frame_type == 'future']
-    
-    if not past_detections or not future_detections:
-        return None
-    
-    # Get the closest past and future detections
-    closest_past = max(past_detections, key=lambda x: x[0])  # Highest negative offset (closest to 0)
-    closest_future = min(future_detections, key=lambda x: x[0])  # Lowest positive offset (closest to 0)
-    
-    past_detection = closest_past[1]
-    future_detection = closest_future[1]
-    
-    if not past_detection.bbox or not future_detection.bbox:
-        return None
-    
-    # Linear interpolation for bbox (simple mid-point)
-    past_bbox = np.array(past_detection.bbox)
-    future_bbox = np.array(future_detection.bbox)
-    interpolated_bbox = ((past_bbox + future_bbox) / 2).tolist()
-    
-    # Average confidence with decay factor for interpolated detections
-    interpolated_confidence = None
-    if past_detection.confidence is not None and future_detection.confidence is not None:
-        avg_confidence = (past_detection.confidence + future_detection.confidence) / 2
-        # Apply decay factor for interpolated detections to show lower confidence
-        interpolated_confidence = float(avg_confidence * 0.85)
-    
-    # Create interpolated detection
-    return Detection(
-        bbox=interpolated_bbox,
-        confidence=interpolated_confidence,
-        class_id=past_detection.class_id,
-        class_name=past_detection.class_name,
-        text=past_detection.text,
-        tracker_id=past_detection.tracker_id,
-        masks=past_detection.masks,
-        segments=past_detection.segments,
-        keypoints=past_detection.keypoints,
-        zones=past_detection.zones,
-        zone_names=past_detection.zone_names,
-        metadata={'interpolated': True, 'interpolation_source': 'buffer_smoother'}
-    )
+    if previous.confidence is not None and following.confidence is not None:
+        filled.confidence = (previous.confidence + following.confidence) / 2 * 0.85
+    else:
+        filled.confidence = None
+    filled.line_crossings = []
+    filled.metadata = {
+        **(previous.metadata or {}),
+        'interpolated': True,
+        'interpolation_source': 'buffer_smoother',
+    }
+    return filled

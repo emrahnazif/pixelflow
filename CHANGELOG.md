@@ -34,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`smooth` keeps what it is given.** It returns every detection of the frame, in order
+  (untracked ones were dropped when others were tracked), keeps `labels`, `line_crossings`,
+  `total_time` and `first_seen_time`, and always returns a new `Detections` (at the edges it
+  returned the buffer's own). A filled-in box is placed by distance, not at the midpoint, and
+  its masks, outline, keypoints and metadata come with it. An even buffer now smooths too; it
+  returned every frame unsmoothed.
 - **`shift_masks` cuts a raster mask at the canvas edges** instead of failing (or wrapping) for
   a negative offset or a mask that runs off the canvas, and rounds a fractional offset.
 - **`TimeTracker` sets `first_seen_time` on every frame, in seconds.** It was set only on an

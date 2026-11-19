@@ -45,7 +45,7 @@ def _translate_detection(detection: Detection, dx: float, dy: float, canvas_shap
 
     Raster masks are pasted onto a ``canvas_shape`` (``(height, width)``) canvas at
     ``(dx, dy)``, or kept as they are without one. Used by ``crop_detections``, by its
-    inverse and by ``SlicedInference``.
+    inverse, by ``SlicedInference`` and by ``smooth`` for filled-in detections.
     """
     if detection.bbox is not None:
         x1, y1, x2, y2 = detection.bbox
