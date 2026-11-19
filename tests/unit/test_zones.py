@@ -5,6 +5,8 @@ Tests zone management, trigger strategies, crossing detection,
 and spatial analytics functionality.
 """
 
+import warnings
+
 import pytest
 import numpy as np
 import pixelflow as pf
@@ -432,6 +434,29 @@ class TestZoneCrossingEdgeCases:
 
         # Should handle gracefully
         assert isinstance(updated, pf.Detections)
+
+    def test_crossing_warns_once_only_after_tracker_warmup(self, sample_detections):
+        """No warning during a tracker's first frames; one warning if ids never come."""
+        crossings = pf.Crossings()
+        crossings.add_crossing(start=(100, 240), end=(540, 240), line_id="line1")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            for _ in range(10):
+                crossings.update(sample_detections)
+        with pytest.warns(UserWarning, match="no detection has had a tracker_id"):
+            crossings.update(sample_detections)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            crossings.update(sample_detections)
+
+    def test_crossing_no_warning_once_ids_appear(self, sample_detections, tracked_detections):
+        crossings = pf.Crossings()
+        crossings.add_crossing(start=(100, 240), end=(540, 240), line_id="line1")
+        crossings.update(tracked_detections)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            for _ in range(20):
+                crossings.update(sample_detections)
 
     def test_zone_update_preserves_detections(self, sample_zones, sample_detections):
         """Test that zone update preserves detection properties."""

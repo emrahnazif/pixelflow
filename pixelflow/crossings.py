@@ -145,6 +145,9 @@ class Crossing:
         pf.strategies : Anchor point strategies for different object types
     """
     
+    # Trackers confirm their first tracks within a few frames (ByteTrack 2, SORT 3).
+    _TRACKER_ID_GRACE_FRAMES = 10
+
     def __init__(
         self,
         start: Tuple[float, float],
@@ -283,6 +286,9 @@ class Crossing:
         self.last_crossing_time: Dict[int, int] = {}  # tracker_id -> frame_count
         self.tracker_positions: Dict[int, List[Tuple[float, float]]] = defaultdict(list)  # For distance tracking
         self.frame_count = 0
+        # A tracker gives no ids on its first frames, so only warn about missing ids once
+        # no detection has had one for a while. False once ids were seen or the warning given.
+        self._check_tracker_ids = True
         
         # Validate triggering_anchor
         triggering_anchor = validate_strategy(triggering_anchor)
@@ -705,7 +711,7 @@ class Crossing:
             - Memory usage scales with number of unique tracker IDs (bounded by deque maxlen)
             - Line side calculation uses precomputed line equation for efficiency
             - Distance calculations use squared distance to avoid expensive sqrt operations
-            - Warning is issued once if no tracker IDs are found (not per frame)
+            - Warns once per line if no detection has had a tracker_id after 10 frames
             
         See Also:
             Crossings.update : Process detections against multiple crossings simultaneously
@@ -729,16 +735,19 @@ class Crossing:
         predictions = detections.detections
         
         # Check if any detections have tracker IDs (for debugging)
-        has_tracker_ids = any(pred.tracker_id is not None for pred in predictions)
-        if predictions and not has_tracker_ids:
-            import warnings
-            warnings.warn(
-                f"Crossing '{self.name}' (ID: {self.line_id}): No detections have tracker_id. "
-                "Crossings require tracker_id for temporal consistency. "
-                "Make sure to use results = tracker.update(results) before crossings.update(results).",
-                UserWarning,
-                stacklevel=3
-            )
+        if self._check_tracker_ids:
+            if any(pred.tracker_id is not None for pred in predictions):
+                self._check_tracker_ids = False
+            elif self.frame_count > self._TRACKER_ID_GRACE_FRAMES:
+                import warnings
+                warnings.warn(
+                    f"Crossing '{self.name}' (ID: {self.line_id}): no detection has had a tracker_id "
+                    f"in {self.frame_count} frames. Crossings require tracker_id for temporal consistency. "
+                    "Make sure to use results = tracker.update(results) before crossings.update(results).",
+                    UserWarning,
+                    stacklevel=3
+                )
+                self._check_tracker_ids = False
 
         for i, prediction in enumerate(predictions):
             # Skip if no tracker_id
