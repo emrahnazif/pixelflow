@@ -36,7 +36,7 @@ after `update()`, or the counts are those of the previous frame. On a tracked vi
 also shows how many objects have entered so far, as `Count: <inside now> (Total: <entered>)`. See
 [count objects in a zone](/docs/tracking/zones.md) for how objects are counted.
 
-Give each zone a `color` when you add it: without one, every zone is drawn in the same red.
+Without a `color`, each zone gets its own, picked from its id; pass `color` when you add it to choose.
 
 ## Parameters
 
