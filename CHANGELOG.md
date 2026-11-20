@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`VideoReader(rate=2)` reads 2 frames a second, picked by the frames' own times.** It
+  returns the first frame of every half second. `stride` takes every Nth frame instead, so in a
+  video whose frame rate changes as it plays (common from phones) it takes more frames from the
+  fast parts. `fps` is the rate, so a writer made with `like=` plays at the right speed.
+  `read_video` takes `rate` too. It cannot be combined with `stride`.
+- **`VideoReader.frame_number` and `frame_time` say which frame was just returned**: its number
+  in the file, counting from 0, and its time in milliseconds. They work with `stride`, `rate`,
+  `start` and `read_frame`, so a result can be drawn back on the original frame, read again, or
+  passed to a tracker as its `timestamp`.
+
 ## [0.9.0] - 2026-11-20
 
 Transparent images can be saved: `save_image` and `encode_image` write RGBA cut-outs to PNG,

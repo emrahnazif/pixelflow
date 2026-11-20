@@ -106,6 +106,26 @@ match, so a writer made with `like=` plays the result at the right speed: for th
 69 frames at 5 fps instead of 341 at 25. `start=300` starts at frame 300, and `seek(0)` goes
 back to the beginning; looping over the reader again does not.
 
+`rate=2` gives 2 frames a second instead: the first frame of every half second, by the frames'
+own times. Unlike a stride, it stays even in a video whose frame rate changes as it plays, which is
+common in phone recordings. `fps` is the rate, so a writer made with `like=` still plays at the
+right speed.
+
+After each frame, `video.frame_number` is its number in the file, counting from 0, and
+`video.frame_time` its time in milliseconds. Use them to draw a result back on the original frame,
+or read it again with `read_frame`:
+
+```python
+import pixelflow as pf
+
+with pf.VideoReader("crowd.mp4", rate=2) as video:
+    for frame in video:
+        print(video.frame_number, round(video.frame_time))
+```
+
+A tracker takes the frame's real time as `timestamp`, in seconds:
+`tracker.update(detections, timestamp=video.frame_time / 1000)`.
+
 `seek` is fast, but in a video whose frame rate changes as it plays, which is common in phone
 recordings, it can land a few frames away from the one you asked for. When you need one exact
 frame, use `read_frame`:

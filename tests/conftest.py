@@ -5,6 +5,9 @@ Provides reusable test data including sample images, detections, zones,
 and mock objects for consistent testing across all test modules.
 """
 
+import shutil
+import subprocess
+
 import pytest
 import numpy as np
 import cv2
@@ -267,6 +270,23 @@ def rgba_image():
     rgb = np.dstack([x * 3, y * 4, x + y]).astype(np.uint8)
     alpha = np.clip(255 - (np.hypot(x - 40, y - 30) - 20) * 40, 0, 255).astype(np.uint8)
     return np.dstack([rgb, alpha])
+
+
+@pytest.fixture
+def vfr_video_path(tmp_path):
+    """A 60-frame video whose frame rate changes, as phone recordings' do: 30 fps for its first
+    second, then 10 fps for three. Frame i is a solid shade of i * 4. Needs ffmpeg."""
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("needs ffmpeg to make a variable-rate file")
+    frames = tmp_path / "vfr-frames"
+    frames.mkdir()
+    for i in range(60):
+        cv2.imwrite(str(frames / f"{i:03d}.png"), np.full((48, 64, 3), i * 4, dtype=np.uint8))
+    path = str(tmp_path / "vfr.mp4")
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-framerate", "30", "-i", str(frames / "%03d.png"),
+                    "-vf", "setpts='if(lt(N,30),N/30/TB,(1+(N-30)/10)/TB)'", "-fps_mode", "passthrough",
+                    "-c:v", "libx264", "-g", "60", "-pix_fmt", "yuv420p", path], check=True)
+    return path
 
 
 @pytest.fixture

@@ -5,9 +5,6 @@ Tests Media, Buffer, SlicedInference, Smoother, Timer, and other
 utility functionality.
 """
 
-import shutil
-import subprocess
-
 import pytest
 import numpy as np
 import cv2
@@ -92,25 +89,71 @@ class TestVideoReader:
             assert len(times) == 20 and times == sorted(times)
             assert np.array_equal(video.read(), truth[1])
 
-    @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg to make a variable-rate file")
-    def test_read_frame_is_exact_at_a_variable_frame_rate(self, tmp_path):
-        """A phone-style file: 30 fps, then 10. seek() lands on the wrong frames in the slow part
-        (OpenCV converts with the average rate); read_frame doesn't."""
-        frames = tmp_path / "frames"
-        frames.mkdir()
-        for i in range(60):
-            cv2.imwrite(str(frames / f"{i:03d}.png"), np.full((48, 64, 3), i * 4, dtype=np.uint8))
-        path = str(tmp_path / "vfr.mp4")
-        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-framerate", "30", "-i", str(frames / "%03d.png"),
-                        "-vf", "setpts='if(lt(N,30),N/30/TB,(1+(N-30)/10)/TB)'", "-fps_mode", "passthrough",
-                        "-c:v", "libx264", "-g", "60", "-pix_fmt", "yuv420p", path], check=True)
-        truth = decoded_frames(path)
-
-        with pf.VideoReader(path) as video:
+    def test_read_frame_is_exact_at_a_variable_frame_rate(self, vfr_video_path):
+        """seek() lands on the wrong frames in the slow part (OpenCV converts with the average
+        rate); read_frame doesn't."""
+        truth = decoded_frames(vfr_video_path)
+        with pf.VideoReader(vfr_video_path) as video:
             assert len(video.timestamps()) == 60
-        with pf.VideoReader(path) as video:
+        with pf.VideoReader(vfr_video_path) as video:
             for n in (45, 31, 59, 10, 30, 0, 50):
                 assert np.array_equal(video.read_frame(n), truth[n])
+                assert video.frame_number == n
+
+    def test_rate_yields_the_first_frame_of_each_stretch(self, counted_video_path):
+        """25 fps at 2 a second: frames 0 and 13 (0 s and 0.52 s), the first of each half second."""
+        truth = decoded_frames(counted_video_path)
+        with pf.VideoReader(counted_video_path, rate=2) as video:
+            assert video.fps == 2
+            assert video.frames == 2  # ceil(0.8 s * 2)
+            got = [(video.frame_number, frame) for frame in video]
+        assert [n for n, _ in got] == [0, 13]
+        assert all(np.array_equal(frame, truth[n]) for n, frame in got)
+
+    def test_rate_is_by_time_at_a_variable_frame_rate(self, vfr_video_path):
+        """30 fps for a second, then 10: one frame every half second in both parts, where a
+        stride would take three times as many from the first second."""
+        truth = decoded_frames(vfr_video_path)
+        with pf.VideoReader(vfr_video_path, rate=2) as video:
+            got = [(video.frame_number, frame) for frame in video]
+        assert [n for n, _ in got] == [0, 15, 30, 35, 40, 45, 50, 55]
+        assert all(np.array_equal(frame, truth[n]) for n, frame in got)
+
+    def test_rate_at_or_above_the_video_s_own_yields_every_frame(self, counted_video_path):
+        with pf.VideoReader(counted_video_path, rate=100) as video:
+            assert video.fps == 25
+            assert sum(1 for _ in video) == 20
+
+    def test_rate_and_stride_are_one_or_the_other(self, counted_video_path):
+        with pytest.raises(ValueError, match="not both"):
+            pf.VideoReader(counted_video_path, stride=2, rate=2)
+        for rate in (0, -1, float("nan")):
+            with pytest.raises(ValueError, match="positive"):
+                pf.VideoReader(counted_video_path, rate=rate)
+
+    def test_read_video_takes_rate(self, counted_video_path):
+        with pf.read_video(counted_video_path, rate=2) as video:
+            assert video.fps == 2 and "rate=2" in repr(video)
+
+    def test_frame_number_and_time_follow_every_way_of_reading(self, counted_video_path):
+        """None before a frame; then the file's own number and time, with stride, start,
+        read() and read_frame alike."""
+        with pf.VideoReader(counted_video_path) as video:
+            times = video.timestamps()
+        with pf.VideoReader(counted_video_path, stride=3) as video:
+            assert video.frame_number is None and video.frame_time is None
+            seen = [(video.frame_number, video.frame_time) for _ in video]
+        assert seen == [(n, times[n]) for n in range(0, 20, 3)]
+        with pf.VideoReader(counted_video_path, start=5) as video:
+            video.read()
+            assert video.frame_number == 5
+            video.read_frame(12)
+            assert (video.frame_number, video.frame_time) == (12, times[12])
+            video.read()
+            assert video.frame_number == 13
+            video.seek(0)
+            next(iter(video))
+            assert video.frame_number == 0
 
     def test_facts(self, temp_video_path):
         """Metadata is read once at open and describes what iteration yields."""

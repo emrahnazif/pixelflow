@@ -337,10 +337,18 @@ class _FrameSource:
         if self._pending is not None:
             frame, self._pending = self._pending, None
             return frame
-        if self._cap is None or not self._cap.grab():
+        if self._cap is None or not self._grab():
             return None
         frame = self._retrieve_rgb()
         return None if frame is None else self._hand_out(frame)
+
+    def _grab(self) -> bool:
+        """Decode the next frame without converting it. False when the source ends."""
+        return self._cap.grab()
+
+    def _keeper(self):
+        """A test, called after each grab with its index, of whether to yield that frame."""
+        return lambda index: index % self._stride == 0
 
     def __iter__(self) -> Iterator[np.ndarray]:
         """Yield RGB frames from the current position until the source ends.
@@ -354,6 +362,7 @@ class _FrameSource:
         so they must be walked; they need not be turned into arrays.
         """
         index = 0
+        keep = self._keeper()
 
         # A source that decoded a frame in order to learn its own size hands that
         # frame out here rather than discarding it. Dropping it would silently skip
@@ -364,9 +373,9 @@ class _FrameSource:
             index = 1
 
         while self._cap is not None:
-            if not self._cap.grab():
+            if not self._grab():
                 break
-            if index % self._stride == 0:
+            if keep(index):
                 frame = self._retrieve_rgb()
                 if frame is None:
                     break
@@ -420,6 +429,12 @@ class VideoReader(_FrameSource):
         stride: Yield every Nth frame. ``fps`` and ``frames`` are divided to match,
             so a writer built with ``like=`` stays correct.
         start: Frame to begin at. Equivalent to ``seek(start)`` after opening.
+        rate: Yield this many frames a second instead of every Nth: the first frame of
+            every ``1/rate`` seconds, by the frames' own times, so a video whose frame rate
+            changes as it plays is sampled evenly too. ``fps`` is the rate. Not with
+            ``stride``.
+
+    After a frame is returned, ``frame_number`` and ``frame_time`` say which frame it is.
 
     Example:
         >>> video = pf.VideoReader("input.mp4", stride=2)
@@ -433,10 +448,15 @@ class VideoReader(_FrameSource):
     """
 
     def __init__(self, source: str, *, stride: int = 1, start: int = 0,
-                 width=_UNSET):
+                 rate: Optional[float] = None, width=_UNSET):
         _reject_width(width, "VideoReader")
         if stride < 1:
             raise ValueError(f"stride must be at least 1, got {stride}")
+        self._rate = None if rate is None else _valid_fps(rate)
+        if rate is not None and self._rate is None:
+            raise ValueError(f"rate must be a positive number of frames a second, got {rate!r}")
+        if rate is not None and stride != 1:
+            raise ValueError("give stride or rate, not both: each says which frames to read")
 
         path = _resolve_path(source)
         self._source = str(path)
@@ -460,9 +480,52 @@ class VideoReader(_FrameSource):
 
         # Frame times learned by read_frame, in ms; they grow only as far as it is asked.
         self._times: list[float] = []
+        # The number of the next frame a grab decodes, and the time of the last one: see _grab.
+        self._next = 0
+        self._grabbed_time: Optional[float] = None
+        self._frame_number: Optional[int] = None
+        self._frame_time: Optional[float] = None
 
         if start:
             self.seek(start)
+
+    @property
+    def fps(self) -> Optional[float]:
+        """Rate of the frames this reader yields, or None if unknown.
+
+        Divided by ``stride``. With ``rate``, the rate, capped at the source's own: an
+        upper bound for a video with parts slower than the rate, which yield every frame.
+        """
+        if self._rate is None:
+            return super().fps
+        return self._rate if self._source_fps is None else min(self._rate, self._source_fps)
+
+    @property
+    def frames(self) -> Optional[int]:
+        """Estimated number of frames this reader will yield, or None if unknown."""
+        if self._rate is None or self.duration is None:
+            return super().frames
+        return min(self._source_frames, math.ceil(self.duration * self._rate))
+
+    @property
+    def frame_number(self) -> Optional[int]:
+        """Number in the file, from 0, of the frame last returned; None before the first.
+
+        Counts every frame of the file, whatever ``stride`` or ``rate`` is, so a result
+        can be drawn back on the original frame or read again with :meth:`read_frame`.
+        After :meth:`seek` in a video whose frame rate changes, it is only as exact as the
+        seek; :meth:`read_frame` is always exact.
+        """
+        return self._frame_number
+
+    @property
+    def frame_time(self) -> Optional[float]:
+        """Time in the file, in milliseconds, of the frame last returned; None before the first.
+
+        The frame's own time, so it stays right when the frame rate changes. A tracker
+        takes it as ``timestamp`` (in seconds: ``frame_time / 1000``).
+        """
+        return self._frame_time
 
     @property
     def codec(self) -> str:
@@ -481,6 +544,39 @@ class VideoReader(_FrameSource):
         video (common in phone recordings). :meth:`read_frame` is exact.
         """
         self._cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+        self._next = frame_number
+
+    def _grab(self) -> bool:
+        """Decode the next frame, keeping its number and its time."""
+        if not self._cap.grab():
+            return False
+        self._next += 1
+        self._grabbed_time = self._cap.get(cv2.CAP_PROP_POS_MSEC)
+        return True
+
+    def _hand_out(self, frame: np.ndarray) -> np.ndarray:
+        self._frame_number, self._frame_time = self._next - 1, self._grabbed_time
+        return super()._hand_out(frame)
+
+    def _keeper(self):
+        """With ``rate``: keep the first frame of each 1/rate seconds, by the frames' times."""
+        if self._rate is None:
+            return super()._keeper()
+        first, last = None, -1
+
+        def keep(index: int) -> bool:
+            nonlocal first, last
+            time = self._grabbed_time
+            if first is None:
+                first = time
+            # The slack keeps a frame exactly on a boundary in the stretch it starts.
+            stretch = int((time - first + _FRAME_TIME_SLACK_MS) * self._rate / 1000)
+            if stretch <= last:
+                return False
+            last = stretch
+            return True
+
+        return keep
 
     def timestamps(self) -> list[float]:
         """Every frame's time in the file, in milliseconds, in order.
@@ -512,21 +608,20 @@ class VideoReader(_FrameSource):
         if number < 0:
             raise IndexError(f"no frame {number}: frames are counted from 0")
         if number < len(times):
-            found = self._seek_to_time(times[number])
+            found = self._seek_to_frame(number)
         else:
             # Frame times not known this far yet: learn them on the way, on this capture.
             if times:
-                found = self._seek_to_time(times[-1])
+                found = self._seek_to_frame(len(times) - 1)
             else:
                 self.seek(0)
-                found = self._grab_time() is not None
+                found = self._grab()
                 if found:
-                    times.append(self._cap.get(cv2.CAP_PROP_POS_MSEC))
+                    times.append(self._grabbed_time)
             while found and len(times) <= number:
-                at = self._grab_time()
-                found = at is not None
+                found = self._grab()
                 if found:
-                    times.append(at)
+                    times.append(self._grabbed_time)
         if not found:
             raise IndexError(f"no frame {number}: the video has {len(times)} frames")
         frame = self._retrieve_rgb()
@@ -534,19 +629,14 @@ class VideoReader(_FrameSource):
             raise IndexError(f"frame {number} can't be decoded")
         return self._hand_out(frame)
 
-    def _grab_time(self) -> Optional[float]:
-        """Decode the next frame without converting it: its time in ms, or None at the end."""
-        if not self._cap.grab():
-            return None
-        return self._cap.get(cv2.CAP_PROP_POS_MSEC)
-
-    def _seek_to_time(self, target: float) -> bool:
-        """Grab the frame whose time is *target* ms. False if the video ends first.
+    def _seek_to_frame(self, number: int) -> bool:
+        """Grab frame *number*, whose time is known. False if the video ends first.
 
         A seek can't be trusted to land on a frame, but the times OpenCV reports while
         decoding are the frames' own. So seek to a moment before the target (further
         back if the seek lands after it), then decode forward to the frame.
         """
+        target = self._times[number]
         back = 1000.0  # ms: one second covers the gap between keyframes in most files
         while True:
             from_start = target - back <= 0
@@ -554,24 +644,26 @@ class VideoReader(_FrameSource):
                 self.seek(0)
             else:
                 self._cap.set(cv2.CAP_PROP_POS_MSEC, target - back)
-            at = self._grab_time()
-            if at is None:
+            if not self._grab():
                 return False
-            if from_start or at <= target + _FRAME_TIME_SLACK_MS:
+            if from_start or self._grabbed_time <= target + _FRAME_TIME_SLACK_MS:
                 break
             back *= 2
-        while at < target - _FRAME_TIME_SLACK_MS:
-            at = self._grab_time()
-            if at is None:
+        while self._grabbed_time < target - _FRAME_TIME_SLACK_MS:
+            if not self._grab():
                 return False
+        self._next = number + 1  # positioned by time, so the count is set, not trusted
         return True
 
     def __repr__(self):
         rate = "unknown fps" if self.fps is None else f"{self.fps:.2f}fps"
         count = "unknown length" if self.frames is None else f"{self.frames} frames"
-        stride = "" if self._stride == 1 else f", stride={self._stride}"
+        if self._rate is not None:
+            sampling = f", rate={self._rate:g}"
+        else:
+            sampling = "" if self._stride == 1 else f", stride={self._stride}"
         return (f"VideoReader({self._source!r}, {self.width}x{self.height}, "
-                f"{rate}, {count}{stride})")
+                f"{rate}, {count}{sampling})")
 
 
 class CameraStream(_FrameSource):
@@ -799,19 +891,20 @@ class VideoWriter:
 # ---------------------------------------------------------------------------
 
 def read_video(source: str, *, stride: int = 1, start: int = 0,
-               width=_UNSET) -> "VideoReader":
+               rate: Optional[float] = None, width=_UNSET) -> "VideoReader":
     """Open a video file for frame-by-frame reading.
 
     Args:
         source: Path to a video file.
         stride: Yield every Nth frame.
         start: Frame to begin at.
+        rate: Yield this many frames a second instead, by the frames' own times.
 
     Returns:
         A VideoReader instance.
     """
     _reject_width(width, "read_video")
-    return VideoReader(source, stride=stride, start=start)
+    return VideoReader(source, stride=stride, start=start, rate=rate)
 
 
 def read_image(source, width=_UNSET) -> np.ndarray:
