@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-20
+
+Videos can be read at a set number of frames a second, spaced evenly even in phone videos whose
+frame rate changes, and every frame you get says which frame of the file it is and when it was taken.
+
 ### Added
 
 - **`VideoReader(rate=2)` reads 2 frames a second, picked by the frames' own times.** It
