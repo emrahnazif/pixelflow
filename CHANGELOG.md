@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-20
+
+Transparent images can be saved: `save_image` and `encode_image` write RGBA cut-outs to PNG,
+WebP and TIFF, and refuse formats that would lose the transparency.
+
 ### Added
 
 - **`save_image` and `encode_image` write RGBA images and keep their transparency**, for
