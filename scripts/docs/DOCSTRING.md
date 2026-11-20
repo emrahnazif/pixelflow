@@ -3,7 +3,7 @@
 How to write the docstrings of PixelFlow's functions, classes and modules. Docstrings are read in
 `help()` and in editors, and the API reference is generated from them (`generate_docs.py` in this
 folder). They describe one function precisely; the guides that explain tasks live in `docs/` and
-follow [docs-guide.md](../../docs-guide.md).
+follow [DOCS-GUIDE.md](../../DOCS-GUIDE.md).
 
 ## Module-Level Documentation
 
