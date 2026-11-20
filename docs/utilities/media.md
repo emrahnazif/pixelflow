@@ -92,6 +92,21 @@ match, so a writer made with `like=` plays the result at the right speed: for th
 69 frames at 5 fps instead of 341 at 25. `start=300` starts at frame 300, and `seek(0)` goes
 back to the beginning; looping over the reader again does not.
 
+`seek` is fast, but in a video whose frame rate changes as it plays, which is common in phone
+recordings, it can land a few frames away from the one you asked for. When you need one exact
+frame, use `read_frame`:
+
+```python
+with pf.VideoReader("crowd.mp4") as video:
+    frame = video.read_frame(120)
+```
+
+It returns frame 120 of the file, counting from 0 and ignoring `stride`, and the loop continues
+from the frame after it. The first time, it decodes the video up to that frame to learn each
+frame's time, so reading a frame near the end of a long video takes about as long as reading the
+video once. Later calls for frames before that one are fast. `video.timestamps()` gives the time of
+every frame, in milliseconds.
+
 ## Cameras and streams
 
 `CameraStream` reads a webcam by its number, or a network stream by its URL, with the same loop:

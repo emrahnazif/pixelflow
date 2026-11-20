@@ -202,6 +202,11 @@ def _warn_if_alpha_dropped(handle, label: str = "") -> None:
         _warn_alpha_dropped(label, stacklevel=4)
 
 
+# Frames are always more than half a millisecond apart, so a decoded time within this of a
+# known frame time is that frame.
+_FRAME_TIME_SLACK_MS = 0.5
+
+
 def _valid_fps(value) -> Optional[float]:
     """Return a usable frame rate, or None.
 
@@ -237,7 +242,6 @@ class _FrameSource:
     _source_fps: Optional[float] = None
     _source_frames: Optional[int] = None
     _pending: Optional[np.ndarray] = None
-    _times: Optional[list] = None  # VideoReader.timestamps(), once worked out
     is_live: bool = False
 
     # -- facts ---------------------------------------------------------------
@@ -446,6 +450,9 @@ class VideoReader(_FrameSource):
         fourcc = int(self._cap.get(cv2.CAP_PROP_FOURCC))
         self._codec = "".join([chr((fourcc >> 8 * i) & 0xFF) for i in range(4)])
 
+        # Frame times learned by read_frame, in ms; they grow only as far as it is asked.
+        self._times: list[float] = []
+
         if start:
             self.seek(start)
 
@@ -462,79 +469,94 @@ class VideoReader(_FrameSource):
     def seek(self, frame_number: int) -> None:
         """Jump to a frame. Iteration continues from there; ``seek(0)`` replays.
 
-        Fast, and exact for a file with a constant frame rate. OpenCV turns the number into a
-        time with the *average* rate, so in a variable-rate file -- most phone recordings -- it
-        can land on another frame. :meth:`read_frame` is exact for both.
+        Fast, but it can land on another frame when the frame rate changes during the
+        video (common in phone recordings). :meth:`read_frame` is exact.
         """
         self._cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
 
-    def timestamps(self) -> list:
-        """Every frame's time in the file, in milliseconds, in order: what :meth:`read_frame`
-        finds a frame by.
+    def timestamps(self) -> list[float]:
+        """Every frame's time in the file, in milliseconds, in order.
 
-        One pass over the file that decodes without converting a single frame, on a capture of
-        its own, so the reader's position is untouched; kept on the reader after. A file's frame
-        times never change, so a caller opening the file again can keep the list (it's plain
-        numbers) and hand it to :meth:`read_frame` instead of paying for the pass again.
+        Decodes the whole file (without converting frames), so it takes about as long as
+        reading the video once. The reader's position is not changed.
         """
-        if self._times is None:
-            capture = cv2.VideoCapture(self._source)
-            try:
-                self._times = []
-                while capture.grab():
-                    self._times.append(capture.get(cv2.CAP_PROP_POS_MSEC))
-            finally:
-                capture.release()
-        return self._times
+        capture = cv2.VideoCapture(self._source)
+        try:
+            times = []
+            while capture.grab():
+                times.append(capture.get(cv2.CAP_PROP_POS_MSEC))
+        finally:
+            capture.release()
+        self._times = times
+        return list(times)
 
-    def read_frame(self, number: int, timestamps: Optional[list] = None) -> np.ndarray:
-        """Frame *number* of the file (counting from 0, every frame, whatever ``stride`` is), as
-        RGB; exact in a variable-rate file too. Iteration continues after it.
+    def read_frame(self, number: int) -> np.ndarray:
+        """Frame *number* of the file as RGB, exact in a variable-rate file too.
 
-        A seek can't be trusted to land on a frame, but the times OpenCV reports while decoding
-        are the frames' own. So this seeks to a moment at or before the frame and decodes forward
-        to the frame with its time: a seek and a few decodes, as with any seek to a frame between
-        keyframes.
-
-        Args:
-            number: Which frame.
-            timestamps: The file's :meth:`timestamps`, kept from an earlier reader; without them,
-                this reader's own.
+        Counts every frame from 0, whatever ``stride`` is. Iteration continues after it.
+        The first call for frame *n* decodes up to *n* to learn the frame times; later
+        calls for frames up to *n* are a seek and a few decodes.
 
         Raises:
             IndexError: If the file has no such frame.
         """
-        times = self.timestamps() if timestamps is None else timestamps
-        if not 0 <= number < len(times):
+        times = self._times
+        if number < 0:
+            raise IndexError(f"no frame {number}: frames are counted from 0")
+        if number < len(times):
+            found = self._seek_to_time(times[number])
+        else:
+            # Frame times not known this far yet: learn them on the way, on this capture.
+            if times:
+                found = self._seek_to_time(times[-1])
+            else:
+                self.seek(0)
+                found = self._grab_time() is not None
+                if found:
+                    times.append(self._cap.get(cv2.CAP_PROP_POS_MSEC))
+            while found and len(times) <= number:
+                at = self._grab_time()
+                found = at is not None
+                if found:
+                    times.append(at)
+        if not found:
             raise IndexError(f"no frame {number}: the video has {len(times)} frames")
-        target = times[number]
-        # Half a millisecond: frame times are fractions of a millisecond apart at no rate a camera has.
-        early = 0.5
-
-        def step() -> float:
-            """Decode the next frame (without converting it): its time."""
-            if not self._cap.grab():
-                raise IndexError(f"no frame {number}: the video ends before it")
-            return self._cap.get(cv2.CAP_PROP_POS_MSEC)
-
-        back = 1000.0
-        while True:  # a seek may land after the moment asked for: back off until it doesn't
-            if target - back <= 0:  # back to the start: decode from frame 0
-                self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                at = step()
-                break
-            self._cap.set(cv2.CAP_PROP_POS_MSEC, target - back)
-            at = step()
-            if at <= target + early:
-                break
-            back *= 2
-        while at < target - early:
-            at = step()
-        self._pending = None
         frame = self._retrieve_rgb()
         if frame is None:
             raise IndexError(f"frame {number} can't be decoded")
         return self._hand_out(frame)
+
+    def _grab_time(self) -> Optional[float]:
+        """Decode the next frame without converting it: its time in ms, or None at the end."""
+        if not self._cap.grab():
+            return None
+        return self._cap.get(cv2.CAP_PROP_POS_MSEC)
+
+    def _seek_to_time(self, target: float) -> bool:
+        """Grab the frame whose time is *target* ms. False if the video ends first.
+
+        A seek can't be trusted to land on a frame, but the times OpenCV reports while
+        decoding are the frames' own. So seek to a moment before the target (further
+        back if the seek lands after it), then decode forward to the frame.
+        """
+        back = 1000.0  # ms: one second covers the gap between keyframes in most files
+        while True:
+            from_start = target - back <= 0
+            if from_start:
+                self.seek(0)
+            else:
+                self._cap.set(cv2.CAP_PROP_POS_MSEC, target - back)
+            at = self._grab_time()
+            if at is None:
+                return False
+            if from_start or at <= target + _FRAME_TIME_SLACK_MS:
+                break
+            back *= 2
+        while at < target - _FRAME_TIME_SLACK_MS:
+            at = self._grab_time()
+            if at is None:
+                return False
+        return True
 
     def __repr__(self):
         rate = "unknown fps" if self.fps is None else f"{self.fps:.2f}fps"

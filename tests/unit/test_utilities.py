@@ -10,7 +10,6 @@ import subprocess
 
 import pytest
 import numpy as np
-
 import cv2
 import time
 from unittest.mock import patch
@@ -67,6 +66,24 @@ class TestVideoReader:
             with pytest.raises(IndexError):
                 video.read_frame(-1)
 
+    def test_read_frame_reads_times_only_as_far_as_the_frame(self, counted_video_path):
+        """The first read_frame(n) learns n + 1 frame times, not the whole file's."""
+        truth = decoded_frames(counted_video_path)
+        with pf.VideoReader(counted_video_path) as video:
+            assert np.array_equal(video.read_frame(3), truth[3])
+            assert len(video._times) == 4
+            assert np.array_equal(video.read_frame(1), truth[1])
+            assert len(video._times) == 4
+            assert np.array_equal(video.read_frame(10), truth[10])
+            assert len(video._times) == 11
+
+    def test_timestamps_is_a_copy(self, counted_video_path):
+        truth = decoded_frames(counted_video_path)
+        with pf.VideoReader(counted_video_path) as video:
+            video.timestamps().clear()
+            assert len(video.timestamps()) == 20
+            assert np.array_equal(video.read_frame(19), truth[19])
+
     def test_timestamps_leave_the_position_alone(self, counted_video_path):
         truth = decoded_frames(counted_video_path)
         with pf.VideoReader(counted_video_path) as video:
@@ -82,24 +99,18 @@ class TestVideoReader:
         frames = tmp_path / "frames"
         frames.mkdir()
         for i in range(60):
-            image = np.full((48, 64, 3), 0, dtype=np.uint8)
-            for bit in range(6):  # the frame's number, in blocks across the top
-                if i >> bit & 1:
-                    image[:16, bit * 10:bit * 10 + 10] = 255
-            cv2.imwrite(str(frames / f"{i:03d}.png"), image)
-        path = tmp_path / "vfr.mp4"
+            cv2.imwrite(str(frames / f"{i:03d}.png"), np.full((48, 64, 3), i * 4, dtype=np.uint8))
+        path = str(tmp_path / "vfr.mp4")
         subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-framerate", "30", "-i", str(frames / "%03d.png"),
                         "-vf", "setpts='if(lt(N,30),N/30/TB,(1+(N-30)/10)/TB)'", "-fps_mode", "passthrough",
-                        "-c:v", "libx264", "-g", "60", "-pix_fmt", "yuv420p", str(path)], check=True)
+                        "-c:v", "libx264", "-g", "60", "-pix_fmt", "yuv420p", path], check=True)
+        truth = decoded_frames(path)
 
-        def number(image):
-            return sum(1 << bit for bit in range(6) if image[8, bit * 10 + 5].mean() > 128)
-
-        with pf.VideoReader(str(path)) as video:
-            times = video.timestamps()
-            assert len(times) == 60
+        with pf.VideoReader(path) as video:
+            assert len(video.timestamps()) == 60
+        with pf.VideoReader(path) as video:
             for n in (45, 31, 59, 10, 30, 0, 50):
-                assert number(video.read_frame(n, times)) == n
+                assert np.array_equal(video.read_frame(n), truth[n])
 
     def test_facts(self, temp_video_path):
         """Metadata is read once at open and describes what iteration yields."""

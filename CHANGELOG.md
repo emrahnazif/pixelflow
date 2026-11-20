@@ -9,15 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`VideoReader.read_frame(n)`: frame *n* of a file, exactly, at a variable frame rate too.**
-  `seek()` (OpenCV's frame position) turns a frame number into a time with the *average* rate,
-  so in a variable-rate file -- most phone recordings -- it can land on another frame; seeking
-  by time does the same. `read_frame` seeks to a moment at or before the frame and decodes
-  forward to the frame with its own time, which OpenCV reports correctly while decoding. It
-  counts every frame of the file, whatever the reader's `stride`, and iteration continues after
-  it. `VideoReader.timestamps()` is every frame's time (one pass that decodes without converting,
-  on its own capture, kept on the reader); a caller opening the file again can pass the list to
-  `read_frame` instead of paying for the pass again. `seek()`'s docstring now says where it's inexact.
+- **`VideoReader.read_frame(n)` returns exactly frame *n*, even when the frame rate changes
+  during the video.** `seek()` converts a frame number to a time using the average frame rate,
+  so in such videos (common from phones) it can land on another frame. `read_frame` counts every
+  frame from 0, whatever `stride` is, and iteration continues after it. The first call for frame
+  *n* decodes up to *n* to learn the frame times; later calls are a seek and a few decodes.
+  `VideoReader.timestamps()` returns every frame's time in milliseconds.
 
 ### Changed
 
