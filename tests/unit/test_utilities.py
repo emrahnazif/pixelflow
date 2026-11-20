@@ -5,8 +5,12 @@ Tests Media, Buffer, SlicedInference, Smoother, Timer, and other
 utility functionality.
 """
 
+import shutil
+import subprocess
+
 import pytest
 import numpy as np
+
 import cv2
 import time
 from unittest.mock import patch
@@ -41,6 +45,61 @@ def decoded_frames(path):
 
 class TestVideoReader:
     """Tests for VideoReader class."""
+
+    def test_read_frame_is_the_frame_decoding_reaches(self, counted_video_path):
+        """read_frame(n) is exactly the n-th decoded frame, in any order, ignoring stride."""
+        truth = decoded_frames(counted_video_path)
+        with pf.VideoReader(counted_video_path, stride=3) as video:
+            for n in (7, 0, 19, 3, 12, 12):
+                frame = video.read_frame(n)
+                assert np.array_equal(frame, truth[n])
+
+    def test_read_frame_then_iterate_continues_after_it(self, counted_video_path):
+        truth = decoded_frames(counted_video_path)
+        with pf.VideoReader(counted_video_path) as video:
+            video.read_frame(5)
+            assert np.array_equal(video.read(), truth[6])
+
+    def test_read_frame_out_of_range(self, counted_video_path):
+        with pf.VideoReader(counted_video_path) as video:
+            with pytest.raises(IndexError):
+                video.read_frame(20)
+            with pytest.raises(IndexError):
+                video.read_frame(-1)
+
+    def test_timestamps_leave_the_position_alone(self, counted_video_path):
+        truth = decoded_frames(counted_video_path)
+        with pf.VideoReader(counted_video_path) as video:
+            video.read()
+            times = video.timestamps()
+            assert len(times) == 20 and times == sorted(times)
+            assert np.array_equal(video.read(), truth[1])
+
+    @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg to make a variable-rate file")
+    def test_read_frame_is_exact_at_a_variable_frame_rate(self, tmp_path):
+        """A phone-style file: 30 fps, then 10. seek() lands on the wrong frames in the slow part
+        (OpenCV converts with the average rate); read_frame doesn't."""
+        frames = tmp_path / "frames"
+        frames.mkdir()
+        for i in range(60):
+            image = np.full((48, 64, 3), 0, dtype=np.uint8)
+            for bit in range(6):  # the frame's number, in blocks across the top
+                if i >> bit & 1:
+                    image[:16, bit * 10:bit * 10 + 10] = 255
+            cv2.imwrite(str(frames / f"{i:03d}.png"), image)
+        path = tmp_path / "vfr.mp4"
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-framerate", "30", "-i", str(frames / "%03d.png"),
+                        "-vf", "setpts='if(lt(N,30),N/30/TB,(1+(N-30)/10)/TB)'", "-fps_mode", "passthrough",
+                        "-c:v", "libx264", "-g", "60", "-pix_fmt", "yuv420p", str(path)], check=True)
+
+        def number(image):
+            return sum(1 << bit for bit in range(6) if image[8, bit * 10 + 5].mean() > 128)
+
+        with pf.VideoReader(str(path)) as video:
+            times = video.timestamps()
+            assert len(times) == 60
+            for n in (45, 31, 59, 10, 30, 0, 50):
+                assert number(video.read_frame(n, times)) == n
 
     def test_facts(self, temp_video_path):
         """Metadata is read once at open and describes what iteration yields."""

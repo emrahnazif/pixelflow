@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`VideoReader.read_frame(n)`: frame *n* of a file, exactly, at a variable frame rate too.**
+  `seek()` (OpenCV's frame position) turns a frame number into a time with the *average* rate,
+  so in a variable-rate file -- most phone recordings -- it can land on another frame; seeking
+  by time does the same. `read_frame` seeks to a moment at or before the frame and decodes
+  forward to the frame with its own time, which OpenCV reports correctly while decoding. It
+  counts every frame of the file, whatever the reader's `stride`, and iteration continues after
+  it. `VideoReader.timestamps()` is every frame's time (one pass that decodes without converting,
+  on its own capture, kept on the reader); a caller opening the file again can pass the list to
+  `read_frame` instead of paying for the pass again. `seek()`'s docstring now says where it's inexact.
+
 ### Changed
 
 - **License: PixelFlow is now licensed under the Apache License 2.0** (was MIT), the license

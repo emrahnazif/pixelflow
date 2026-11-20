@@ -237,6 +237,7 @@ class _FrameSource:
     _source_fps: Optional[float] = None
     _source_frames: Optional[int] = None
     _pending: Optional[np.ndarray] = None
+    _times: Optional[list] = None  # VideoReader.timestamps(), once worked out
     is_live: bool = False
 
     # -- facts ---------------------------------------------------------------
@@ -459,8 +460,81 @@ class VideoReader(_FrameSource):
         return self._codec
 
     def seek(self, frame_number: int) -> None:
-        """Jump to a frame. Iteration continues from there; ``seek(0)`` replays."""
+        """Jump to a frame. Iteration continues from there; ``seek(0)`` replays.
+
+        Fast, and exact for a file with a constant frame rate. OpenCV turns the number into a
+        time with the *average* rate, so in a variable-rate file -- most phone recordings -- it
+        can land on another frame. :meth:`read_frame` is exact for both.
+        """
         self._cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+
+    def timestamps(self) -> list:
+        """Every frame's time in the file, in milliseconds, in order: what :meth:`read_frame`
+        finds a frame by.
+
+        One pass over the file that decodes without converting a single frame, on a capture of
+        its own, so the reader's position is untouched; kept on the reader after. A file's frame
+        times never change, so a caller opening the file again can keep the list (it's plain
+        numbers) and hand it to :meth:`read_frame` instead of paying for the pass again.
+        """
+        if self._times is None:
+            capture = cv2.VideoCapture(self._source)
+            try:
+                self._times = []
+                while capture.grab():
+                    self._times.append(capture.get(cv2.CAP_PROP_POS_MSEC))
+            finally:
+                capture.release()
+        return self._times
+
+    def read_frame(self, number: int, timestamps: Optional[list] = None) -> np.ndarray:
+        """Frame *number* of the file (counting from 0, every frame, whatever ``stride`` is), as
+        RGB; exact in a variable-rate file too. Iteration continues after it.
+
+        A seek can't be trusted to land on a frame, but the times OpenCV reports while decoding
+        are the frames' own. So this seeks to a moment at or before the frame and decodes forward
+        to the frame with its time: a seek and a few decodes, as with any seek to a frame between
+        keyframes.
+
+        Args:
+            number: Which frame.
+            timestamps: The file's :meth:`timestamps`, kept from an earlier reader; without them,
+                this reader's own.
+
+        Raises:
+            IndexError: If the file has no such frame.
+        """
+        times = self.timestamps() if timestamps is None else timestamps
+        if not 0 <= number < len(times):
+            raise IndexError(f"no frame {number}: the video has {len(times)} frames")
+        target = times[number]
+        # Half a millisecond: frame times are fractions of a millisecond apart at no rate a camera has.
+        early = 0.5
+
+        def step() -> float:
+            """Decode the next frame (without converting it): its time."""
+            if not self._cap.grab():
+                raise IndexError(f"no frame {number}: the video ends before it")
+            return self._cap.get(cv2.CAP_PROP_POS_MSEC)
+
+        back = 1000.0
+        while True:  # a seek may land after the moment asked for: back off until it doesn't
+            if target - back <= 0:  # back to the start: decode from frame 0
+                self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                at = step()
+                break
+            self._cap.set(cv2.CAP_PROP_POS_MSEC, target - back)
+            at = step()
+            if at <= target + early:
+                break
+            back *= 2
+        while at < target - early:
+            at = step()
+        self._pending = None
+        frame = self._retrieve_rgb()
+        if frame is None:
+            raise IndexError(f"frame {number} can't be decoded")
+        return self._hand_out(frame)
 
     def __repr__(self):
         rate = "unknown fps" if self.fps is None else f"{self.fps:.2f}fps"
