@@ -752,6 +752,16 @@ class TestReadImageFromArray:
                 pf.read_image(value)
 
 
+def as_bgra(rgba):
+    """What an RGBA image should decode to with IMREAD_UNCHANGED."""
+    return cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA)
+
+
+def decode_unchanged(data):
+    """Decode encoded bytes keeping alpha, which read_image drops by design."""
+    return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
+
+
 class TestEncodeImage:
     """encode_image -- the mirror of read_image's buffer branch.
 
@@ -775,8 +785,34 @@ class TestEncodeImage:
         assert isinstance(pf.encode_image(sample_image, ".png"), bytes)
 
     def test_rejects_non_rgb(self):
-        with pytest.raises(ValueError, match="RGB uint8"):
-            pf.encode_image(np.zeros((8, 8, 4), dtype=np.uint8))
+        for image in (np.zeros((8, 8), dtype=np.uint8), np.zeros((8, 8, 4), dtype=np.float32)):
+            with pytest.raises(ValueError, match="RGB uint8"):
+                pf.encode_image(image)
+
+    @pytest.mark.parametrize("extension", [".jpg", ".png", ".webp"])
+    def test_rgb_bytes_are_unchanged(self, sample_image, extension):
+        """Three channels encode exactly as before RGBA was accepted."""
+        _, expected = cv2.imencode(extension, cv2.cvtColor(sample_image, cv2.COLOR_RGB2BGR))
+        assert pf.encode_image(sample_image, extension) == expected.tobytes()
+
+    @pytest.mark.parametrize("extension", [".png", ".tif", ".tiff"])
+    def test_rgba_keeps_every_pixel(self, rgba_image, extension):
+        decoded = decode_unchanged(pf.encode_image(rgba_image, extension))
+        assert np.array_equal(decoded, as_bgra(rgba_image))
+
+    def test_rgba_webp_keeps_the_visible_pixels(self, rgba_image):
+        """WebP keeps alpha, but not the colour under fully transparent pixels."""
+        decoded = decode_unchanged(pf.encode_image(rgba_image, ".webp"))
+        expected = as_bgra(rgba_image)
+        visible = rgba_image[:, :, 3] > 0
+        assert np.array_equal(decoded[:, :, 3], expected[:, :, 3])
+        assert np.array_equal(decoded[visible], expected[visible])
+
+    @pytest.mark.parametrize("extension", [".jpg", ".jpeg", ".bmp"])
+    def test_rgba_refused_for_a_format_without_transparency(self, rgba_image, extension):
+        """OpenCV would drop the alpha without a word; refusing says so."""
+        with pytest.raises(ValueError, match="no transparency"):
+            pf.encode_image(rgba_image, extension)
 
     def test_unknown_format_does_not_leak_cv2_error(self, sample_image):
         with pytest.raises(ValueError, match="does not support"):
@@ -804,8 +840,20 @@ class TestSaveImage:
         with pytest.raises(ValueError, match="cannot encode"):
             pf.save_image(str(tmp_path / "out.xyz"), sample_image)
 
+    def test_rgba_round_trip(self, tmp_path, rgba_image):
+        path = tmp_path / "cutout.png"
+        pf.save_image(str(path), rgba_image)
+        assert np.array_equal(decode_unchanged(path.read_bytes()), as_bgra(rgba_image))
+
+    def test_rgba_as_jpeg_names_the_real_reason(self, tmp_path, rgba_image):
+        """Not "OpenCV cannot encode .jpg", which is false: JPEG has no transparency."""
+        path = tmp_path / "cutout.jpg"
+        with pytest.raises(ValueError, match="no transparency"):
+            pf.save_image(str(path), rgba_image)
+        assert not path.exists()
+
     @pytest.mark.parametrize("image,description", [
-        (np.zeros((40, 60, 4), dtype=np.uint8), "4 channels"),
+        (np.zeros((40, 60, 2), dtype=np.uint8), "2 channels"),
         (np.zeros((40, 60), dtype=np.uint8), "grayscale"),
         (np.zeros((40, 60, 3), dtype=np.float32), "float32"),
     ])

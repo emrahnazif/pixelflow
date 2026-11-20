@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`save_image` and `encode_image` write RGBA images and keep their transparency**, for
+  example a cut-out from background removal. An HxWx4 `uint8` array is taken as RGBA and
+  written to `.png`, `.webp`, `.tif` or `.tiff`. For a format without transparency, such as
+  `.jpg` or `.bmp`, they raise a `ValueError` instead of dropping the alpha or choosing a
+  background colour. RGB images encode to the same bytes as before. `read_image` still returns
+  RGB.
+
 ## [0.8.0] - 2026-11-20
 
 PixelFlow is now licensed under Apache 2.0 and ships five multi-object trackers ported from

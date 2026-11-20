@@ -143,8 +143,12 @@ def _resolve_path(source: str) -> Path:
 # read_image is skipped for it -- which is most of any real dataset.
 _ALPHA_CAPABLE = frozenset({".png", ".gif", ".webp", ".tif", ".tiff", ".jp2"})
 
+# Formats that keep an RGBA image's alpha when written. OpenCV writes a 4-channel array
+# to JPEG or BMP too, dropping the alpha without a word, so RGBA goes only to these.
+_ALPHA_WRITABLE = frozenset({".png", ".webp", ".tif", ".tiff"})
 
-def _require_rgb(image, what: str = "frame") -> None:
+
+def _require_rgb(image, what: str = "frame", alpha: bool = False) -> None:
     """Raise unless ``image`` is the RGB uint8 HxWx3 array this library passes around.
 
     ``cv2.cvtColor`` accepts a 2D or 4-channel array for ``RGB2BGR`` and quietly
@@ -156,15 +160,19 @@ def _require_rgb(image, what: str = "frame") -> None:
     BGR are the same bytes in a different sequence, and no inspection recovers which
     one you have. So every array entering this library is **taken** to be RGB, at
     every boundary, not just this one.
+
+    ``alpha=True`` also accepts RGBA uint8 HxWx4, for the encoders, which convert it
+    themselves (see ``_to_bgr``). Every other boundary takes RGB only.
     """
+    if alpha:
+        expected, channels = "an RGB uint8 HxWx3 or RGBA HxWx4", (3, 4)
+    else:
+        expected, channels = "an RGB uint8 HxWx3", (3,)
     if not isinstance(image, np.ndarray):
+        raise ValueError(f"expected {expected} {what}, got {type(image).__name__}")
+    if image.ndim != 3 or image.shape[2] not in channels or image.dtype != np.uint8:
         raise ValueError(
-            f"expected an RGB uint8 HxWx3 {what}, got {type(image).__name__}"
-        )
-    if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
-        raise ValueError(
-            f"expected an RGB uint8 HxWx3 {what}, got shape {image.shape} "
-            f"dtype {image.dtype}"
+            f"expected {expected} {what}, got shape {image.shape} dtype {image.dtype}"
         )
 
 
@@ -902,33 +910,26 @@ def read_image(source, width=_UNSET) -> np.ndarray:
     return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
 
-def encode_image(image: np.ndarray, extension: str = ".png") -> bytes:
-    """Encode an RGB image to bytes, for an HTTP response or a blob.
+def _to_bgr(image, suffix: str) -> np.ndarray:
+    """Check an RGB or RGBA image against *suffix* and convert it for OpenCV.
 
-    The mirror of ``read_image``'s buffer branch, and it exists for the same reason:
-    channel order is established at the codec boundary, so there has to be one
-    encoder. Hand-rolling ``cv2.imencode`` means hand-rolling the RGB-to-BGR step
-    that goes with it, and that is the step that gets forgotten.
-
-    Args:
-        image: RGB uint8 array of shape (H, W, 3).
-        extension: Container/format extension, with or without the dot.
-
-    Returns:
-        The encoded bytes.
-
-    Raises:
-        ValueError: If the image is not RGB uint8 HxWx3, or OpenCV cannot encode
-            the requested format.
-
-    Example:
-        >>> payload = pf.encode_image(frame, ".jpg")
-        >>> return Response(payload, media_type="image/jpeg")
+    RGBA is refused for a format outside ``_ALPHA_WRITABLE`` rather than flattened,
+    which would mean choosing a background colour for the caller.
     """
-    _require_rgb(image, "image")
-    suffix = extension if extension.startswith(".") else f".{extension}"
+    _require_rgb(image, "image", alpha=True)
+    if image.shape[2] == 3:
+        return cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    if suffix.lower() not in _ALPHA_WRITABLE:
+        formats = ", ".join(sorted(_ALPHA_WRITABLE))
+        raise ValueError(
+            f"Cannot encode an RGBA image as {suffix!r}: the format has no transparency. "
+            f"Use one of {formats}, or drop the alpha with image[:, :, :3]."
+        )
+    return cv2.cvtColor(image, cv2.COLOR_RGBA2BGRA)
 
-    bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+
+def _imencode(bgr: np.ndarray, suffix: str) -> bytes:
+    """``cv2.imencode``, with an unknown format raised as a ValueError."""
     try:
         success, buffer = cv2.imencode(suffix, bgr)
     except cv2.error as error:
@@ -940,20 +941,54 @@ def encode_image(image: np.ndarray, extension: str = ".png") -> bytes:
     return buffer.tobytes()
 
 
+def encode_image(image: np.ndarray, extension: str = ".png") -> bytes:
+    """Encode an RGB or RGBA image to bytes, for an HTTP response or a blob.
+
+    The mirror of ``read_image``'s buffer branch, and it exists for the same reason:
+    channel order is established at the codec boundary, so there has to be one
+    encoder. Hand-rolling ``cv2.imencode`` means hand-rolling the RGB-to-BGR step
+    that goes with it, and that is the step that gets forgotten.
+
+    Args:
+        image: RGB uint8 array of shape (H, W, 3), or RGBA (H, W, 4), such as a
+            cut-out from background removal.
+        extension: Container/format extension, with or without the dot. An RGBA
+            image needs one that keeps transparency: ``.png``, ``.webp``, ``.tif`` or
+            ``.tiff``. WebP does not keep the colour of fully transparent pixels.
+
+    Returns:
+        The encoded bytes.
+
+    Raises:
+        ValueError: If the image is not RGB or RGBA uint8, an RGBA image is given a
+            format without transparency (such as ``.jpg``), or OpenCV cannot encode
+            the requested format.
+
+    Example:
+        >>> payload = pf.encode_image(frame, ".jpg")
+        >>> return Response(payload, media_type="image/jpeg")
+    """
+    suffix = extension if extension.startswith(".") else f".{extension}"
+    return _imencode(_to_bgr(image, suffix), suffix)
+
+
 def save_image(path: str, image: np.ndarray) -> None:
-    """Save an RGB numpy array to an image file.
+    """Save an RGB or RGBA numpy array to an image file.
 
     Args:
         path: Output file path (extension determines format).
-        image: RGB numpy array.
+        image: RGB uint8 array (H, W, 3), or RGBA (H, W, 4) for a format that keeps
+            transparency: ``.png``, ``.webp``, ``.tif`` or ``.tiff``.
 
     Raises:
         NotADirectoryError: If the parent directory does not exist.
-        ValueError: If the image is not RGB uint8 HxWx3, or the extension is
+        ValueError: If the image is not RGB or RGBA uint8, an RGBA image is given a
+            format without transparency (such as ``.jpg``), or the extension is
             missing or not one OpenCV can write.
         OSError: If the file cannot be written for any other reason.
     """
-    _require_rgb(image, "image")
+    # Checked first, so a bad image is reported before a bad path, as it always was.
+    _require_rgb(image, "image", alpha=True)
     target = Path(path)
 
     # cv2.imwrite returns False for a missing directory and raises cv2.error for an
@@ -970,13 +1005,12 @@ def save_image(path: str, image: np.ndarray) -> None:
             f"what format to encode. Try '{target.name}.jpg' or '{target.name}.png'."
         )
 
-    # Encoding goes through encode_image rather than cv2.imwrite, so that the
-    # RGB-to-BGR step and the frame guard exist once. A second encoder here would
-    # be exactly the duplication encode_image was added to remove.
+    # Encoding goes through the same steps as encode_image rather than cv2.imwrite,
+    # so that the colour conversion and the checks exist once.
+    bgr = _to_bgr(image, target.suffix)
     try:
-        payload = encode_image(image, target.suffix)
+        payload = _imencode(bgr, target.suffix)
     except ValueError as error:
-        # The image was checked above, so anything left is the format.
         raise ValueError(
             f"Cannot write {path!r}: OpenCV cannot encode '{target.suffix}' files"
         ) from error

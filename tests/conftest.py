@@ -261,6 +261,15 @@ def portrait_video_path(tmp_path):
 
 
 @pytest.fixture
+def rgba_image():
+    """A 60x80 RGBA cut-out: a soft-edged opaque disc on a fully transparent background."""
+    y, x = np.mgrid[0:60, 0:80]
+    rgb = np.dstack([x * 3, y * 4, x + y]).astype(np.uint8)
+    alpha = np.clip(255 - (np.hypot(x - 40, y - 30) - 20) * 40, 0, 255).astype(np.uint8)
+    return np.dstack([rgb, alpha])
+
+
+@pytest.fixture
 def counted_video_path(tmp_path):
     """A 25 fps, 20-frame video whose frames are individually identifiable.
 

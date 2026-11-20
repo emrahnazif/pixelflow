@@ -48,6 +48,20 @@ example as an HTTP response, `encode_image` returns the encoded bytes:
 data = pf.encode_image(image, ".jpg")
 ```
 
+Both also write an RGBA image, shape `(height, width, 4)`, such as a cut-out from a background
+removal model, and keep its transparency:
+
+```python
+pf.save_image("cutout.png", rgba)
+```
+
+Use `.png`, `.webp`, `.tif` or `.tiff`. JPEG and BMP cannot store transparency, so writing RGBA
+to them raises a `ValueError` instead of choosing a background colour for you. To save the image
+without its transparency, drop the alpha: `pf.save_image("cutout.jpg", rgba[:, :, :3])`. WebP
+does not keep the colour of fully transparent pixels, which nobody sees anyway.
+
+`read_image` still returns RGB, so reading the file back drops the alpha.
+
 ## Videos
 
 `VideoReader` gives the frames of a video file one by one; `VideoWriter` writes them to a new
