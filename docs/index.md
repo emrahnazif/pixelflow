@@ -13,6 +13,8 @@ them into one format, so the code that comes after the model (filtering, trackin
 objects in a zone, drawing the results, writing a video) is written once and works with any
 of them.
 
+[![Video: PixelFlow drawing a box around each player on a football field as the camera moves](/docs/assets/intro-video.png)](https://emrah.fr/pixelflow/)
+
 ## Install
 
 ```bash
