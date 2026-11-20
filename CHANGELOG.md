@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-20
+
+PixelFlow is now licensed under Apache 2.0 and ships five multi-object trackers ported from
+roboflow/trackers, replacing `ByteTracker`. `VideoReader.read_frame` reads an exact frame from
+phone videos too. Many fixes: smoothing, masks, transforms, `Buffer`, zones and crossings, and
+the Mayaku and Ultralytics converters.
+
 ### Added
 
 - **`VideoReader.read_frame(n)` returns exactly frame *n*, even when the frame rate changes
