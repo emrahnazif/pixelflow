@@ -1,4 +1,4 @@
-# Classifications: what a model says about the whole image
+# Classifications: what a model says about an image
 
 <!--
 summary: Read a classifier's answers as a Classifications object: take the best one, the top few, or every class above a score.

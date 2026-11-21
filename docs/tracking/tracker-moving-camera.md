@@ -62,7 +62,7 @@ print(len(ids), "ids")
 44 ids
 ```
 
-![The first four seconds of the shaken crowd video: the whole picture jumps from frame to frame while each walking person keeps the same id in their box](/docs/assets/camera-motion.mp4)
+[![Video: the first four seconds of the shaken crowd video: the whole picture jumps from frame to frame while each walking person keeps the same id in their box](/docs/assets/camera-motion.png)](https://emrah.fr/pixelflow/tracking/tracker-moving-camera/)
 
 The shaken video holds the same people as the original, where ByteTrack gives 48 ids. Without the
 frame, tracking falls apart:

@@ -43,7 +43,7 @@ print(writer.frames_written, "frames")
 341 frames
 ```
 
-![Four seconds of the crowd video, zoomed in, side by side: on the left the boxes from the model shake from frame to frame, on the right the smoothed boxes follow each person steadily](/docs/assets/smoothing.mp4)
+[![Video: four seconds of the crowd video, zoomed in, side by side: on the left the boxes from the model shake from frame to frame, on the right the smoothed boxes follow each person steadily](/docs/assets/smoothing.png)](https://emrah.fr/pixelflow/tracking/smoothing/)
 
 The buffer hands each frame back 2 frames late, once the 2 frames after it have arrived;
 `pf.smooth(buffer)` then returns that frame's detections, each box averaged with the same
