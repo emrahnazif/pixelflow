@@ -49,3 +49,5 @@ MANIFEST
 ehthumbs.db
 Thumbs.db
 
+/docs/assets/*.mp4
+/docs/assets/*.mov
