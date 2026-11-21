@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-21
+
+The docs come with the package, so coding agents can read the docs of the installed version
+offline.
+
 ### Added
 
 - **The docs pages now ship inside the package**, in `pixelflow/docs/` next to the code, with
