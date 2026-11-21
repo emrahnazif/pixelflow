@@ -10,7 +10,6 @@ import importlib.util
 from pathlib import Path
 
 import pytest
-from setuptools import find_packages
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -23,7 +22,12 @@ def test_every_code_package_is_listed_in_pyproject():
     tomllib = pytest.importorskip("tomllib")  # Python 3.11+
     config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     listed = set(config["tool"]["setuptools"]["packages"])
-    found = set(find_packages(ROOT, include=["pixelflow", "pixelflow.*"]))
+    # Every folder under pixelflow/ with an __init__.py. Not setuptools.find_packages:
+    # setuptools is not installed by default on Python 3.12+.
+    found = {
+        ".".join(init.parent.relative_to(ROOT).parts)
+        for init in (ROOT / "pixelflow").rglob("__init__.py")
+    }
     assert listed - {"pixelflow.docs"} == found, (
         "pyproject.toml [tool.setuptools] packages must list exactly the packages under pixelflow/"
     )
