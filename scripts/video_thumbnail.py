@@ -2,15 +2,16 @@
 
 Usage: python scripts/video_thumbnail.py VIDEO [OUTPUT] [--frame N] [--size PX]
 
-    python scripts/video_thumbnail.py docs/assets/PixelFlow-Intro-720.mp4 docs/assets/intro-video.png
+    python scripts/video_thumbnail.py docs/assets/intro-video.mp4 docs/assets/intro-video.png
 
 GitHub does not play videos in Markdown, so the docs show this image instead, linked to
 the docs page where the video plays:
 
     [![Video: what it shows](/docs/assets/intro-video.png)](https://emrah.fr/pixelflow/)
 
-OUTPUT defaults to the video's name with `-thumbnail.png`, next to the video. The button
-is docs/assets/play-button.png (drawn from play-button.svg), centered on the frame.
+OUTPUT defaults to the video's name with `.png`, next to the video: the docs site
+needs the still image and the video to have the same name. The button
+is scripts/play-button.png (drawn from play-button.svg), centered on the frame.
 """
 
 import argparse
@@ -20,7 +21,7 @@ from PIL import Image
 
 import pixelflow as pf
 
-BUTTON = Path(__file__).resolve().parent.parent / "docs" / "assets" / "play-button.png"
+BUTTON = Path(__file__).resolve().parent / "play-button.png"
 
 
 def thumbnail(video: Path, frame_number: int = 0, size: int | None = None) -> Image.Image:
@@ -40,12 +41,12 @@ def thumbnail(video: Path, frame_number: int = 0, size: int | None = None) -> Im
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("video", type=Path)
-    parser.add_argument("output", type=Path, nargs="?", help="default: VIDEO-thumbnail.png")
+    parser.add_argument("output", type=Path, nargs="?", help="default: VIDEO.png")
     parser.add_argument("--frame", type=int, default=0, help="frame to use, from 0 (default 0)")
     parser.add_argument("--size", type=int, help="button width in px (default: frame height / 3)")
     args = parser.parse_args()
 
-    output = args.output or args.video.with_name(f"{args.video.stem}-thumbnail.png")
+    output = args.output or args.video.with_suffix(".png")
     thumbnail(args.video, args.frame, args.size).save(output, optimize=True)
     print(output)
 
