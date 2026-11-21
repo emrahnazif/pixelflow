@@ -436,6 +436,13 @@ detections = pf.Detections.from_dict(data)
 
 Full documentation available at [https://emrah.fr/pixelflow/](https://emrah.fr/pixelflow/)
 
+The docs pages also come with the package, so coding agents can read the docs of the
+version you have installed, offline. `llms.txt` in that folder lists every page:
+
+```bash
+python -c "import pixelflow, pathlib; print(pathlib.Path(pixelflow.__file__).parent / 'docs')"
+```
+
 ## Contributing
 
 Contributions welcome! Please read our contributing guidelines.

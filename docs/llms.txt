@@ -1,0 +1,54 @@
+# PixelFlow
+
+> Turn the output of any detection, segmentation or classification model into one format you can filter, track, count and draw.
+
+These are the docs of the pixelflow version installed next to this file. Paths below are
+relative to this file. Links inside the pages are written from the repository root:
+/docs/tracking/zones.md is tracking/zones.md here. The same pages, with images, are at
+https://emrah.fr/pixelflow/.
+
+- [PixelFlow](index.md): Turn the output of any detection, segmentation or classification model into one format you can filter, track, count and draw.
+
+## Core concepts
+
+- [Classifications: what a model says about an image](core-concepts/classifications.md): Read a classifier's answers as a Classifications object: take the best one, the top few, or every class above a score.
+- [Converters: read results from any model](core-concepts/converters.md): Turn the output of Mayaku, Ultralytics, RF-DETR, SAM, Florence-2, EasyOCR, Detectron2 or your own model into PixelFlow Detections.
+- [Detections: one format for every model's results](core-concepts/detections.md): What a Detections object holds, how to read boxes, classes, masks and keypoints from it, and how to build one yourself.
+- [Filters: keep only the detections you need](core-concepts/filters.md): Keep detections by confidence, class, size, shape, position or tracking time, and remove duplicates, by chaining filter methods.
+- [Save results to JSON and load them back](core-concepts/saving-results.md): Write detections and classifications to JSON or plain dictionaries, read them back, and keep the file small by storing outlines instead of masks.
+
+## Tracking
+
+- [Count objects crossing a line](tracking/crossings.md): Count the tracked objects that cross a line in a video, in each direction and per class, with pf.Crossings.
+- [Smooth jittery boxes](tracking/smoothing.md): Steady the boxes of tracked objects by averaging each one over the frames around it, and fill in boxes the model missed, with pf.smooth.
+- [Measure how long objects stay in view](tracking/time-in-view.md): Measure how long each tracked object has been in a video, and since when it is in a zone, with pf.TimeTracker.
+- [Track objects with a moving camera](tracking/tracker-moving-camera.md): Keep tracker ids stable when the camera pans or shakes, with BoT-SORT's camera motion compensation in pf.tracker.
+- [Track objects across video frames](tracking/tracker.md): Give each object the same id in every frame of a video with pf.tracker: ByteTrack, SORT, OC-SORT, BoT-SORT and C-BIoU.
+- [Count objects in a zone](tracking/zones.md): Count the objects inside an area of a video, and how many have entered it, with pf.Zones and a tracker.
+
+## Utilities
+
+- [Look at past and future frames with a buffer](utilities/buffer.md): Hold the last few frames of a video with their results, so each frame can be processed knowing the frames before and after it, with pf.Buffer.
+- [Read and write images, videos and cameras](utilities/media.md): Read images, videos and camera streams as RGB arrays, and write them back to files, with VideoReader, VideoWriter and read_image.
+- [Detect small objects in large images](utilities/sliced-inference.md): Find small objects a model misses in a large image by running it on overlapping slices and merging the results, with SlicedInference.
+- [Resize, crop, rotate and flip images and detections](utilities/transforms.md): Resize, crop, rotate, flip and adjust the contrast of images, and move detections along with the image so they stay aligned, with pf.transform.
+
+## Visualization
+
+- [Anchors](visualization/anchors.md): Draw dots at the corners, center or edge midpoints of each box with pf.annotate.anchors, to see the points zones and line crossings test.
+- [Blur](visualization/blur.md): Blur people, faces or license plates inside their boxes with pf.annotate.blur, to hide identities before an image is shared.
+- [Box](visualization/box.md): Draw the outline of each detection's bounding box, colored by class, with pf.annotate.box.
+- [Classification](visualization/classification.md): Write an image classifier's top classes and scores in a corner of the image with pf.annotate.classification.
+- [Crossings](visualization/crossings.md): Draw the counting lines of a Crossings object with their in and out counts on each video frame, with pf.annotate.crossings.
+- [Filled box](visualization/filled-box.md): Fill each detection's bounding box with a see-through color, with pf.annotate.filled_box.
+- [FPS counter](visualization/fps-counter.md): Show how many frames per second a video loop processes, in the corner of each frame, with pf.annotate.fps_counter.
+- [Grid overlay](visualization/grid-overlay.md): Draw a grid of lines inside each bounding box with pf.annotate.grid_overlay, as a plain grid or a see-through checkerboard.
+- [Keypoint skeleton](visualization/keypoint-skeleton.md): Join a pose model's keypoints with lines into a stick figure with pf.annotate.keypoint_skeleton, using the COCO body skeleton or your own connections.
+- [Keypoint](visualization/keypoint.md): Draw a dot on each keypoint of a pose model, such as the joints of a person, with pf.annotate.keypoint and a confidence threshold.
+- [Label](visualization/label.md): Write each detection's class, confidence, tracker id or any text next to its box, with pf.annotate.label and format templates.
+- [Mask](visualization/mask.md): Color the exact pixels of each segmented object with a see-through mask, with pf.annotate.mask.
+- [Oval](visualization/oval.md): Draw an ellipse on the ground under each detection, the marker sports broadcasts put under players, with pf.annotate.oval.
+- [Draw results on images](visualization/overview.md): How PixelFlow's drawing functions work: one call per layer, chained in order, drawn on the image you pass in, sized to the image and colored by class.
+- [Pixelate](visualization/pixelate.md): Hide people, faces or license plates behind large square blocks with pf.annotate.pixelate.
+- [Polygon](visualization/polygon.md): Draw the outline of each segmented object as a line with pf.annotate.polygon, from the detection's segments.
+- [Zones](visualization/zones.md): Draw the areas of a Zones object, with their names and the number of objects inside, with pf.annotate.zones.

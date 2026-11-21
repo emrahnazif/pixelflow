@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The docs pages now ship inside the package**, in `pixelflow/docs/` next to the code, with
+  `llms.txt` listing every page and what it covers. Coding agents working in your project can
+  read the docs of the version you have installed, without the internet. The images stay on
+  the website, so the install grows by about 200 KB.
+
 ## [0.10.0] - 2026-11-20
 
 Videos can be read at a set number of frames a second, spaced evenly even in phone videos whose

@@ -65,10 +65,31 @@ Documentation = "https://emrah.fr/pixelflow/"
 [tool.setuptools.dynamic]
 version = {attr = "pixelflow.__version__"}
 
-[tool.setuptools.packages.find]
-include = ["pixelflow*"]
-exclude = ["tests*", "docs*", "examples*", "scripts*"]
+[tool.setuptools]
+# Listed by hand because the docs are mapped in from outside pixelflow/, which automatic
+# discovery cannot do. tests/unit/test_packaging.py fails when a code package is missing here.
+packages = [
+    "pixelflow",
+    "pixelflow.annotators",
+    "pixelflow.classifications",
+    "pixelflow.detections",
+    "pixelflow.tracker",
+    "pixelflow.tracker.botsort",
+    "pixelflow.tracker.bytetrack",
+    "pixelflow.tracker.cbiou",
+    "pixelflow.tracker.ocsort",
+    "pixelflow.tracker.sort",
+    "pixelflow.tracker.utils",
+    "pixelflow.transforms",
+    "pixelflow.docs",
+]
+
+[tool.setuptools.package-dir]
+# The docs pages ship as site-packages/pixelflow/docs/, so coding agents can read the docs
+# of the installed version offline. docs/assets/ (images, videos) stays out of the wheel.
+"pixelflow.docs" = "docs"
 
 [tool.setuptools.package-data]
 # Provenance of the tracker ported from roboflow/trackers (LICENSE and NOTICE ship in dist-info).
 "pixelflow.tracker" = ["UPSTREAM.md"]
+"pixelflow.docs" = ["**/*.md", "llms.txt"]
